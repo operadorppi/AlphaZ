@@ -1,0 +1,95 @@
+caminho,tipo,tamanho_bytes,data_modificacao,modulo,documentacao,status,observacao
+captura_eventos_ms.py,py,10621,2026-08-24 11:06:30,core,DOCUMENTACAO.md (Ref),documentado,239 linhas
+config.json,json,1502,2026-08-25 19:53:37,core,DOCUMENTACAO.md,documentado,
+config.py,py,4235,2026-08-25 17:35:13,core,DOCUMENTACAO.md,documentado,105 linhas
+dashboard_pro.html,html,45894,2026-08-26 14:17:29,core,DOCUMENTACAO.md,documentado,
+features_lib.py,py,41611,2026-08-25 10:31:04,core,DOCUMENTACAO.md (Ref),documentado,982 linhas
+motor_rt_alphaz.py,py,197057,2026-08-26 14:16:19,core,DOCUMENTACAO.md (Ref),documentado,4155 linhas
+motor_web.py,py,106029,2026-08-25 10:08:03,core,DOCUMENTACAO.md (Ref),documentado,2586 linhas
+preco_context_tracker.py,py,7155,2026-08-26 15:33:55,core,DOCUMENTACAO.md (Ref),documentado,125 linhas
+returns_tracker.py,py,896,2026-08-26 15:33:55,core,DOCUMENTACAO.md (Ref),documentado,26 linhas
+scorer.py,py,12846,2026-08-26 14:37:15,core,DOCUMENTACAO.md (Ref),documentado,314 linhas
+session_time_tracker.py,py,1047,2026-08-26 15:33:55,core,DOCUMENTACAO.md (Ref),documentado,28 linhas
+treino_lib.py,py,7833,2026-08-25 21:43:27,core,DOCUMENTACAO.md (Ref),documentado,207 linhas
+volatility_tracker.py,py,1045,2026-08-26 15:33:55,core,DOCUMENTACAO.md (Ref),documentado,26 linhas
+walk_forward_v914_limpo.json,json,12426,2026-08-26 19:11:15,core,,sem doc,
+watchdog.py,py,14566,2026-08-26 14:11:08,core,DOCUMENTACAO.md (Ref),documentado,391 linhas
+dados/ablacao.json,json,867,2026-08-23 01:16:42,dados,,sem doc,
+dados/ajuste_diario_202608.csv,csv,1230,2026-08-26 00:14:01,dados,,sem doc,
+dados/auditoria_labeler.json,json,4076,2026-08-23 00:36:30,dados,,sem doc,
+dados/auditoria_leakage.json,json,390,2026-08-23 00:35:19,dados,,sem doc,
+dados/relatorio_final.json,json,1072,2026-08-23 01:21:17,dados,,sem doc,
+dados/robustez.json,json,1422,2026-08-23 01:26:19,dados,,sem doc,
+dados/vwap_diaria_202608.parquet,parquet,231311487,2026-08-26 00:15:18,dados,,sem doc,
+dados/walk_forward_26_folds.json,json,12428,2026-08-26 16:32:52,dados,,sem doc,
+dados/walk_forward_completo.json,json,1820,2026-08-23 01:15:01,dados,,sem doc,
+dados/walk_forward_otimizado_result.json,json,12428,2026-08-26 16:43:28,dados,,sem doc,
+dados/walk_forward_rigoroso.json,json,2830,2026-08-23 00:40:35,dados,,sem doc,
+dados/walk_forward_v914_limpo.json,json,12180,2026-08-26 16:43:14,dados,,sem doc,
+dados/walk_forward_v914_limpo.log,log,2220,2026-08-24 09:56:38,dados,,sem doc,
+docs/AUDITORIA_FREEBUFF.md,md,11358,2026-08-25 21:23:50,docs,--,documentado,
+docs/CAUSALITY_AUDIT.md,md,3912,2026-08-23 19:51:28,docs,--,documentado,
+docs/DOCUMENTACAO.md,md,81656,2026-08-26 17:17:24,docs,--,documentado,
+docs/DOCUMENTACAO_ALTERACOES.md,md,13653,2026-08-24 22:12:19,docs,--,documentado,
+docs/DOCUMENTACAO_TESTES.md,md,17434,2026-08-23 01:23:26,docs,--,documentado,
+docs/DOCUMENTATION_AUDIT.md,md,7901,2026-08-26 19:22:05,docs,--,documentado,
+docs/DOCUMENTATION_REORGANIZATION_REPORT.md,md,6827,2026-08-26 19:23:51,docs,--,documentado,
+docs/FILE_INVENTORY.csv,csv,7979,2026-08-26 19:21:22,docs,--,documentado,
+docs/METODOLOGIA_BACKTESTER.md,md,28285,2026-08-23 19:51:56,docs,--,documentado,
+docs/RASTREAMENTO_INTEGRACAO.md,md,10496,2026-08-26 12:11:04,docs,--,documentado,
+docs/RELATORIO_REVISAO.md,md,12595,2026-08-24 00:05:32,docs,--,documentado,
+docs/RELATORIO_VALIDACAO.md,md,7712,2026-08-23 21:06:16,docs,--,documentado,
+ml/ablation_test.py,py,14638,2026-08-26 01:26:32,ml,,sem doc,345 linhas
+ml/analisar_features.py,py,820,2026-08-20 17:24:56,ml,,sem doc,20 linhas
+ml/analise_contextual_completa.py,py,7517,2026-08-26 15:05:36,ml,,sem doc,144 linhas
+ml/analise_redundancia.py,py,6955,2026-08-26 00:51:52,ml,,sem doc,194 linhas
+ml/batch_historico.py,py,3250,2026-08-20 22:45:56,ml,,sem doc,76 linhas
+ml/batch_processor.py,py,9163,2026-08-20 23:08:14,ml,,sem doc,233 linhas
+ml/calcular_ajuste_diario.py,py,8992,2026-08-26 00:14:29,ml,,sem doc,244 linhas
+ml/calcular_vwap_diaria.py,py,6367,2026-08-26 00:22:55,ml,,sem doc,167 linhas
+ml/calibrar_modelo.py,py,16548,2026-08-23 20:24:46,ml,,sem doc,436 linhas
+ml/dataset_builder.py,py,13368,2026-08-26 14:37:28,ml,,sem doc,320 linhas
+ml/diag_regime.py,py,670,2026-08-20 17:47:12,ml,,sem doc,13 linhas
+ml/feature_cache.py,py,2127,2026-08-26 15:37:49,ml,DOCUMENTACAO.md (v9.38),documentado,60 linhas
+ml/features_contexto_avancado.py,py,23802,2026-08-26 01:02:42,ml,,sem doc,503 linhas
+ml/features_contexto_preco.py,py,19168,2026-08-25 22:00:28,ml,,sem doc,345 linhas
+ml/features_expansao.py,py,6245,2026-08-26 15:33:55,ml,,sem doc,138 linhas
+ml/importar_historico.py,py,13128,2026-08-21 23:35:16,ml,,sem doc,313 linhas
+ml/integrar_base.py,py,7870,2026-08-26 11:02:22,ml,,sem doc,209 linhas
+ml/labelar_offline.py,py,3730,2026-08-24 08:04:10,ml,,sem doc,95 linhas
+ml/labeler_vectorizado.py,py,13876,2026-08-26 18:17:45,ml,,sem doc,352 linhas
+ml/lightgbm_tune.py,py,5611,2026-08-22 23:03:58,ml,,sem doc,167 linhas
+ml/replay_temporal.py,py,32472,2026-08-23 14:48:16,ml,,sem doc,819 linhas
+ml/retreinar_lgbm_limpo.py,py,10808,2026-08-26 11:29:58,ml,,sem doc,260 linhas
+ml/validacao_rigorosa.py,py,20496,2026-08-25 10:25:47,ml,,sem doc,611 linhas
+ml/validar_contexto_preco.py,py,9510,2026-08-25 22:24:52,ml,,sem doc,202 linhas
+ml/validar_v914.py,py,7833,2026-08-23 17:26:58,ml,,sem doc,167 linhas
+ml/walk_forward.py,py,8584,2026-08-24 08:04:56,ml,,sem doc,215 linhas
+ml/walk_forward_completo.py,py,10965,2026-08-23 14:21:08,ml,,sem doc,305 linhas
+ml/walk_forward_otimizado.py,py,10066,2026-08-26 16:23:48,ml,,sem doc,250 linhas
+ml/walk_forward_v914_limpo.py,py,9689,2026-08-26 16:20:17,ml,,sem doc,238 linhas
+scripts/atualizar_documentacao.py,py,16024,2026-08-24 08:05:32,scripts,,sem doc,460 linhas
+scripts/auto_start.bat,bat,1687,2026-08-26 16:50:52,scripts,,sem doc,
+scripts/iniciar_motor.bat,bat,449,2026-08-26 16:51:06,scripts,,sem doc,
+scripts/observability.py,py,14835,2026-08-24 22:15:33,scripts,,sem doc,411 linhas
+scripts/parar_motor.bat,bat,443,2026-08-25 21:36:56,scripts,,sem doc,
+scripts/pipeline_after_market.bat,bat,1225,2026-08-26 18:52:21,scripts,,sem doc,
+scripts/pipeline_diario.py,py,9091,2026-08-26 16:50:19,scripts,,sem doc,211 linhas
+scripts/relatorio_diario.py,py,6942,2026-08-21 22:58:14,scripts,,sem doc,177 linhas
+scripts/servidor_proxy_dashboard.py,py,2139,2026-08-25 16:52:40,scripts,,sem doc,54 linhas
+testes/__init__.py,py,0,2026-08-24 17:16:38,testes,,sem doc,0 linhas
+testes/test_b3_staleness.py,py,5245,2026-08-26 17:23:36,testes,,sem doc,134 linhas
+testes/test_book_writer.py,py,7023,2026-08-26 17:23:36,testes,,sem doc,182 linhas
+testes/test_com_watchdog.py,py,9697,2026-08-26 17:23:36,testes,,sem doc,243 linhas
+testes/test_config_flat.py,py,5410,2026-08-26 17:23:36,testes,,sem doc,120 linhas
+testes/test_contexto_avancado.py,py,17179,2026-08-26 17:22:56,testes,,sem doc,387 linhas
+testes/test_contexto_preco.py,py,8023,2026-08-26 17:22:56,testes,,sem doc,186 linhas
+testes/test_features.py,py,31101,2026-08-26 17:23:36,testes,,sem doc,778 linhas
+testes/test_integracao_ponta_a_ponta.py,py,10265,2026-08-26 17:23:36,testes,,sem doc,239 linhas
+testes/test_labeler_invariants.py,py,23244,2026-08-26 17:23:36,testes,,sem doc,450 linhas
+testes/test_labeler_offline.py,py,2731,2026-08-26 17:23:36,testes,,sem doc,68 linhas
+testes/test_novas_features.py,py,12224,2026-08-26 17:23:36,testes,,sem doc,303 linhas
+testes/test_r2_aprendizado.py,py,2932,2026-08-26 17:23:36,testes,,sem doc,71 linhas
+testes/test_scorer.py,py,4955,2026-08-26 17:23:36,testes,,sem doc,135 linhas
+testes/test_tt_warmup.py,py,8338,2026-08-26 17:23:36,testes,,sem doc,229 linhas
+testes/testes_causalidade_v3.py,py,14143,2026-08-23 19:44:06,testes,,sem doc,367 linhas

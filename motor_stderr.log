@@ -1,0 +1,6 @@
+16:48:24 [INFO] [DESCOBERTA] Book: {0: 'WDOU26', 1: 'WINV26'}
+16:48:24 [INFO] [DESCOBERTA] T&T:  {0: 'WDOU26', 1: 'WINV26'}
+16:48:31 [INFO] [ASSINATURA] Total: 12362 tópicos
+16:48:31 [INFO] [OK] Dashboard: http://127.0.0.1:5001/
+16:48:31 [INFO] [CAPTURA] saudável (0 rejeitados)
+16:48:31 [INFO] [WATCHDOG] Aguardando primeiro trade do RTD...

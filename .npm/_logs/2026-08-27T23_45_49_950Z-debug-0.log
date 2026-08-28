@@ -1,0 +1,33 @@
+0 verbose cli /usr/local/nvm/versions/node/v24.19.0/bin/node /usr/local/nvm/versions/node/v24.19.0/lib/node_modules/npm/bin/npm-cli.js
+1 info using npm@12.0.2
+2 info using node@v24.19.0
+3 silly config load:file:/usr/local/nvm/versions/node/v24.19.0/lib/node_modules/npm/npmrc
+4 silly config load:file:/home/daytradenofluxo/.npmrc
+5 silly config load:file:/usr/local/nvm/versions/node/v24.19.0/etc/npmrc
+6 verbose title npm exec git+https://github.com/gemini-cli-extensions/data-agent-kit-starter-pack.git --mode=notebook
+7 verbose argv "exec" "--yes" "--" "git+https://github.com/gemini-cli-extensions/data-agent-kit-starter-pack.git" "--mode=notebook"
+8 verbose logfile logs-max:10 dir:/home/daytradenofluxo/.npm/_logs/2026-08-27T23_45_49_950Z-
+9 verbose logfile /home/daytradenofluxo/.npm/_logs/2026-08-27T23_45_49_950Z-debug-0.log
+10 silly logfile done cleaning log files
+11 silly packumentCache heap:2348810240 maxSize:587202560 maxEntrySize:293601280
+12 verbose stack Error: Fetching packages of type "git" have been disabled
+12 verbose stack     at canUse (/usr/local/nvm/versions/node/v24.19.0/lib/node_modules/npm/node_modules/pacote/lib/fetcher.js:485:5)
+12 verbose stack     at FetcherBase.get (/usr/local/nvm/versions/node/v24.19.0/lib/node_modules/npm/node_modules/pacote/lib/fetcher.js:498:7)
+12 verbose stack     at Object.manifest (/usr/local/nvm/versions/node/v24.19.0/lib/node_modules/npm/node_modules/pacote/lib/index.js:20:29)
+12 verbose stack     at getManifest (/usr/local/nvm/versions/node/v24.19.0/lib/node_modules/npm/node_modules/libnpmexec/lib/index.js:28:35)
+12 verbose stack     at missingFromTree (/usr/local/nvm/versions/node/v24.19.0/lib/node_modules/npm/node_modules/libnpmexec/lib/index.js:73:28)
+12 verbose stack     at /usr/local/nvm/versions/node/v24.19.0/lib/node_modules/npm/node_modules/libnpmexec/lib/index.js:199:38
+12 verbose stack     at Array.map (<anonymous>)
+12 verbose stack     at exec (/usr/local/nvm/versions/node/v24.19.0/lib/node_modules/npm/node_modules/libnpmexec/lib/index.js:197:30)
+12 verbose stack     at async Npm.exec (/usr/local/nvm/versions/node/v24.19.0/lib/node_modules/npm/lib/npm.js:194:9)
+12 verbose stack     at async module.exports (/usr/local/nvm/versions/node/v24.19.0/lib/node_modules/npm/lib/cli/entry.js:67:5)
+13 error code EALLOWGIT
+14 error Fetching packages of type "git" have been disabled
+15 error Refusing to fetch "git+https://github.com/gemini-cli-extensions/data-agent-kit-starter-pack.git"
+16 verbose cwd /home/daytradenofluxo
+17 verbose os Linux 6.6.143+
+18 verbose node v24.19.0
+19 verbose npm  v12.0.2
+20 verbose exit 1
+21 verbose code 1
+22 error A complete log of this run can be found in: /home/daytradenofluxo/.npm/_logs/2026-08-27T23_45_49_950Z-debug-0.log

@@ -1,0 +1,11 @@
+# Caches do Python
+**/__pycache__/
+*.py[cod]
+*$py.class
+
+# Dados de Mercado (NUNCA sincronizar via Git)
+MarketData/
+dados/
+*.jsonl
+*.parquet
+.codeoss/

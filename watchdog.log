@@ -1,0 +1,93 @@
+08:45:15 [WD] Falha ao verificar motor rodando: Command '['powershell', '-NoProfile', '-Command', "Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'python*' -and $_.CommandLine -like '*motor_rt_alphaz*' } | Select-Object -ExpandProperty ProcessId"]' timed out after 10 seconds
+08:45:15 [WD] ==================================================
+08:45:15 [WD] Watchdog iniciado | Motor: motor_rt_alphaz.py | Args: ['WINV26', 'WDOU26']
+08:45:15 [WD] Check: 30s | Grace: 120s
+08:45:15 [WD] ==================================================
+08:45:15 [WD] Iniciando motor: C:\Python314\python.exe C:\Freebuff\motor_rt_alphaz.py WINV26 WDOU26
+08:45:15 [WD] Motor iniciado PID=11992
+08:45:45 [WD] Grace period... (30s/120s)
+08:46:16 [WD] Grace period... (60s/120s)
+08:46:46 [WD] Grace period... (90s/120s)
+08:47:16 [WD] Motor sobreviveu ao grace period — marcado como funcional.
+08:50:16 [WD] Motor vivo | PID=11992 | Uptime: 5min | Reinicios (1h): 0
+08:55:16 [WD] Motor vivo | PID=11992 | Uptime: 10min | Reinicios (1h): 0
+09:00:16 [WD] Motor vivo | PID=11992 | Uptime: 15min | Reinicios (1h): 0
+09:02:46 [WD] Motor morreu (exit code=1)
+09:02:46 [WD] Motor morto! Reiniciando...
+09:02:46 [WD] Aguardando 45s...
+09:03:31 [WD] Iniciando motor: C:\Python314\python.exe C:\Freebuff\motor_rt_alphaz.py WINV26 WDOU26
+09:03:31 [WD] Motor iniciado PID=13820
+09:04:01 [WD] Grace period... (30s/120s)
+09:04:31 [WD] Grace period... (60s/120s)
+09:05:01 [WD] Grace period... (90s/120s)
+09:05:31 [WD] Motor vivo | PID=13820 | Uptime: 2min | Reinicios (1h): 1
+09:10:31 [WD] Motor vivo | PID=13820 | Uptime: 7min | Reinicios (1h): 1
+09:11:31 [WD] Motor morreu (exit code=1)
+09:11:31 [WD] Motor morto! Reiniciando...
+09:11:31 [WD] Aguardando 45s...
+09:12:16 [WD] Iniciando motor: C:\Python314\python.exe C:\Freebuff\motor_rt_alphaz.py WINV26 WDOU26
+09:12:16 [WD] Motor iniciado PID=12384
+09:12:46 [WD] Grace period... (30s/120s)
+09:13:16 [WD] Grace period... (60s/120s)
+09:13:46 [WD] Grace period... (90s/120s)
+09:15:46 [WD] Motor vivo | PID=12384 | Uptime: 4min | Reinicios (1h): 2
+09:20:16 [WD] Motor morreu (exit code=1)
+09:20:16 [WD] Motor morto! Reiniciando...
+09:20:16 [WD] Aguardando 45s...
+09:21:01 [WD] Iniciando motor: C:\Python314\python.exe C:\Freebuff\motor_rt_alphaz.py WINV26 WDOU26
+09:21:01 [WD] Motor iniciado PID=14864
+09:21:31 [WD] Grace period... (30s/120s)
+09:22:01 [WD] Grace period... (60s/120s)
+09:22:31 [WD] Grace period... (90s/120s)
+09:23:01 [WD] Motor vivo | PID=14864 | Uptime: 2min | Reinicios (1h): 3
+09:28:01 [WD] Motor vivo | PID=14864 | Uptime: 7min | Reinicios (1h): 3
+09:29:01 [WD] Motor morreu (exit code=1)
+09:29:01 [WD] Motor morto! Reiniciando...
+09:29:01 [WD] Aguardando 45s...
+09:29:46 [WD] Iniciando motor: C:\Python314\python.exe C:\Freebuff\motor_rt_alphaz.py WINV26 WDOU26
+09:29:46 [WD] Motor iniciado PID=372
+09:30:16 [WD] Grace period... (30s/120s)
+09:30:46 [WD] Grace period... (60s/120s)
+09:31:16 [WD] Grace period... (90s/120s)
+09:33:16 [WD] Motor vivo | PID=372 | Uptime: 4min | Reinicios (1h): 4
+09:38:16 [WD] Motor vivo | PID=372 | Uptime: 9min | Reinicios (1h): 4
+09:43:16 [WD] Motor vivo | PID=372 | Uptime: 14min | Reinicios (1h): 4
+09:48:16 [WD] Motor vivo | PID=372 | Uptime: 19min | Reinicios (1h): 4
+09:53:16 [WD] Motor vivo | PID=372 | Uptime: 24min | Reinicios (1h): 4
+09:58:16 [WD] Motor vivo | PID=372 | Uptime: 29min | Reinicios (1h): 4
+10:03:16 [WD] Motor vivo | PID=372 | Uptime: 34min | Reinicios (1h): 4
+10:08:16 [WD] Motor vivo | PID=372 | Uptime: 39min | Reinicios (1h): 4
+10:13:16 [WD] Motor vivo | PID=372 | Uptime: 44min | Reinicios (1h): 4
+10:18:16 [WD] Motor vivo | PID=372 | Uptime: 49min | Reinicios (1h): 4
+10:23:16 [WD] Motor vivo | PID=372 | Uptime: 54min | Reinicios (1h): 4
+10:28:16 [WD] Motor vivo | PID=372 | Uptime: 59min | Reinicios (1h): 4
+10:33:16 [WD] Motor vivo | PID=372 | Uptime: 64min | Reinicios (1h): 4
+10:38:16 [WD] Motor vivo | PID=372 | Uptime: 69min | Reinicios (1h): 4
+10:43:16 [WD] Motor vivo | PID=372 | Uptime: 74min | Reinicios (1h): 4
+10:48:16 [WD] Motor vivo | PID=372 | Uptime: 79min | Reinicios (1h): 4
+10:53:16 [WD] Motor vivo | PID=372 | Uptime: 84min | Reinicios (1h): 4
+10:58:16 [WD] Motor vivo | PID=372 | Uptime: 89min | Reinicios (1h): 4
+11:03:16 [WD] Motor vivo | PID=372 | Uptime: 94min | Reinicios (1h): 4
+11:08:16 [WD] Motor vivo | PID=372 | Uptime: 99min | Reinicios (1h): 4
+11:13:16 [WD] Motor vivo | PID=372 | Uptime: 104min | Reinicios (1h): 4
+11:18:16 [WD] Motor vivo | PID=372 | Uptime: 109min | Reinicios (1h): 4
+11:23:16 [WD] Motor vivo | PID=372 | Uptime: 114min | Reinicios (1h): 4
+11:28:16 [WD] Motor vivo | PID=372 | Uptime: 119min | Reinicios (1h): 4
+11:33:16 [WD] Motor vivo | PID=372 | Uptime: 124min | Reinicios (1h): 4
+11:38:16 [WD] Motor vivo | PID=372 | Uptime: 129min | Reinicios (1h): 4
+11:43:16 [WD] Motor vivo | PID=372 | Uptime: 134min | Reinicios (1h): 4
+11:48:16 [WD] Motor vivo | PID=372 | Uptime: 139min | Reinicios (1h): 4
+11:53:16 [WD] Motor vivo | PID=372 | Uptime: 144min | Reinicios (1h): 4
+11:58:16 [WD] Motor vivo | PID=372 | Uptime: 149min | Reinicios (1h): 4
+12:03:16 [WD] Motor vivo | PID=372 | Uptime: 154min | Reinicios (1h): 4
+12:08:16 [WD] Motor vivo | PID=372 | Uptime: 159min | Reinicios (1h): 4
+12:13:16 [WD] Motor vivo | PID=372 | Uptime: 164min | Reinicios (1h): 4
+12:18:16 [WD] Motor vivo | PID=372 | Uptime: 169min | Reinicios (1h): 4
+12:23:16 [WD] Motor vivo | PID=372 | Uptime: 174min | Reinicios (1h): 4
+12:28:16 [WD] Motor vivo | PID=372 | Uptime: 179min | Reinicios (1h): 4
+12:33:16 [WD] Motor vivo | PID=372 | Uptime: 184min | Reinicios (1h): 4
+12:38:16 [WD] Motor vivo | PID=372 | Uptime: 189min | Reinicios (1h): 4
+12:43:16 [WD] Motor vivo | PID=372 | Uptime: 194min | Reinicios (1h): 4
+12:48:16 [WD] Motor vivo | PID=372 | Uptime: 199min | Reinicios (1h): 4
+12:53:16 [WD] Motor vivo | PID=372 | Uptime: 204min | Reinicios (1h): 4
+12:58:16 [WD] Motor vivo | PID=372 | Uptime: 209min | Reinicios (1h): 4
