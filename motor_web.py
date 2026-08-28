@@ -1328,15 +1328,12 @@ def _thread_com_ciclo_wd(mon, srv, IRTDUpdateEvent, notify, disc, cb,
                 else:
                     tt_sig_cache[a_idx][idx] = None
 
-            for sig in tt_sig_cache[a_idx]:
+            for idx, sig in enumerate(tt_sig_cache[a_idx]):
                 if sig is None:
                     continue
                 current_counts[sig] = current_counts.get(sig, 0) + 1
                 if sig not in example_r:
-                    # Precisamos de um exemplo para extrair os dados depois
-                    # Buscamos no tt_cur usando o índice original se necessário, 
-                    # ou guardamos a ref aqui.
-                    example_r[sig] = sig # Otimização: a própria sig tem os dados brutos
+                    example_r[sig] = tt_cur[a_idx][idx]
 
             # Primeiro retrato pos-warmup: absorve a FIFO atual como baseline.
             # Isso evita fabricar 1000 negocios antigos como se fossem novos.

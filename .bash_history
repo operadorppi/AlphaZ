@@ -66,3 +66,16 @@ git branch -M main
 # Nota: Se já existir, use 'git remote remove origin' antes
 git remote add origin git@github.com:operadorppi/AlphaZ.git
 git remote set-url origin git@github.com:operadorppi/AlphaZ.git
+git add .
+git commit -m "Sincronização Ponto Zero"
+git push -u origin main
+git push -u origin main --force
+sh-keygen -t ed25519
+chmod +x /home/daytradenofluxo/scripts/auto_sync.sh
+./home/daytradenofluxo/scripts/auto_sync.sh &
+tar -czvf alphaz_v10_update.tar.gz motor_web.py scripts/auto_sync.sh core/ features/ adapters/ config.py
+cat ~/.ssh/id_ed25519.pub
+ssh -T git@github.com
+ps aux | grep auto_sync.sh
+chmod +x /home/daytradenofluxo/scripts/auto_sync.sh
+nohup /home/daytradenofluxo/scripts/auto_sync.sh &

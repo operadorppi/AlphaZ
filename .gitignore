@@ -9,3 +9,8 @@ dados/
 *.jsonl
 *.parquet
 .codeoss/
+
+# Segurança e Logs
+.ssh/
+.cache/
+*.log
