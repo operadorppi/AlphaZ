@@ -18,7 +18,7 @@ if %ERRORLEVEL% NEQ 0 (
     echo [!] ERRO: O remote 'origin' nao foi encontrado neste SSD.
     echo.
     echo Para corrigir, execute no terminal:
-    echo git remote add origin https://github.com/SEU_USUARIO/SEU_REPOSITORIO.git
+    echo git remote add origin https://github.com/operadorppi/alphaz.git
     goto wait
 )
 
