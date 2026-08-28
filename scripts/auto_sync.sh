@@ -10,8 +10,13 @@ while true; do
   if [[ -n $(git status -s | grep -vE ".log|.tmp|.tar.gz|__pycache__") ]]; then
     echo "$(date +'%H:%M:%S') - Alterações detectadas! Sincronizando..."
     git add .
-    git commit -m "Auto-sync: $(date +'%Y-%m-%d %H:%M:%S')"
-    git push origin main || echo "Erro ao enviar para o GitHub. Verificando na próxima rodada..."
+    # Verifica se realmente há algo novo para commitar (evita commits vazios)
+    if ! git diff --cached --quiet; then
+      git commit -m "Auto-sync: $(date +'%Y-%m-%d %H:%M:%S')"
+      # Tenta enviar. Se falhar (ex: você mudou algo no PC), tenta baixar e reordenar (rebase) antes de enviar de novo
+      git push origin main || (git pull --rebase origin main && git push origin main) || \
+      echo "Erro crítico de sincronização. Verifique conflitos manuais."
+    fi
   fi
   sleep $INTERVALO
 done
