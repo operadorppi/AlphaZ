@@ -22,6 +22,7 @@ from .kyle_lambda import KyleLambdaTracker
 from .patterns import PadroesMemoria
 from .cross_asset import CrossAssetEngine
 from .percentil import PercentilTracker, RangeTracker, AccumulationTracker
+from .institutional_context import InstitutionalContext
 
 __all__ = [
     # Funcoes
@@ -35,4 +36,5 @@ __all__ = [
     'VolumeProfileTracker', 'EWMAZScore', 'KyleLambdaTracker',
     'PadroesMemoria', 'CrossAssetEngine',
     'PercentilTracker', 'RangeTracker', 'AccumulationTracker',
+    'InstitutionalContext',
 ]

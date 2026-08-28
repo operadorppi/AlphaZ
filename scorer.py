@@ -286,7 +286,10 @@ class ScorerML:
         vals = [float(row.get(c, 0.0)) for c in self.features]
 
         try:
-            p = float(self.modelo.predict_proba(np.array([vals], dtype=np.float32))[0, self._idx_tp])
+            import warnings as _w
+            with _w.catch_warnings():
+                _w.simplefilter('ignore')
+                p = float(self.modelo.predict_proba(np.array([vals], dtype=np.float32))[0, self._idx_tp])
         except Exception as exc:  # v9.19: NUNCA falhar em silencio
             self.fallos += 1
             self.ultimo_fallo_ts = time.time()
@@ -300,6 +303,15 @@ class ScorerML:
         """Retorna apenas a probabilidade bruta para o RiskManager."""
         p = self.prob.get(ativo, 0.5)
         return p
+
+    def decisao(self, ativo, threshold=0.65):
+        """Retorna (lado, prob) baseado no threshold de probabilidade."""
+        p = self.prob.get(ativo, 0.5)
+        if p >= threshold:
+            return 1, p
+        elif p <= (1.0 - threshold):
+            return -1, p
+        return 0, p
 
     def estado_salud(self):
         """Estado do scorer para monitoramento (motor/watchdog)."""

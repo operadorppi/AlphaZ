@@ -91,13 +91,13 @@ class Prediction:
 @dataclass
 class Signal:
     """Sinal produzido pelo SignalEngine a partir de features."""
-    symbol: str
-    timestamp_ms: int
-    lado: str            # 'C' (compra), 'V' (venda), '' (neutro)
-    score: float         # 0.0 a 1.0
-    confianca: float     # EWMA do score
-    motivos: list[str]   # Razões textuais do sinal
-    contrib: list[Any]   # Contribuição por feature
+    symbol: str = ""
+    timestamp_ms: int = 0
+    lado: str = ""            # 'C' (compra), 'V' (venda), '' (neutro)
+    score: float = 0.0         # 0.0 a 1.0
+    confianca: float = 0.0     # EWMA do score
+    motivos: list[str] = field(default_factory=list)   # Razões textuais do sinal
+    contrib: list[Any] = field(default_factory=list)   # Contribuição por feature
     tp: float = 0.0
     sl: float = 0.0
     ml_prob: float = 0.5
@@ -108,6 +108,21 @@ class Signal:
     def __post_init__(self):
         if self.lado not in ('C', 'V', ''):
             raise ValueError(f"Lado inválido: {self.lado}")
+
+    def __getitem__(self, item):
+        if item == 'sinal':
+            return 1 if self.lado == 'C' else (-1 if self.lado == 'V' else 0)
+        return getattr(self, item)
+
+    def __contains__(self, item):
+        if item == 'sinal':
+            return True
+        return hasattr(self, item)
+
+    def get(self, item, default=None):
+        if item == 'sinal':
+            return 1 if self.lado == 'C' else (-1 if self.lado == 'V' else 0)
+        return getattr(self, item, default)
 
 
 @dataclass
@@ -136,7 +151,16 @@ class ExitSignal:
 
 @dataclass
 class RiskDecision:
-    """Resposta do RiskManager sobre permissão de abrir posição."""
+    """Resposta do RiskEngine sobre permissão de abrir posição.
+    
+    Cada decisão gera:
+    - allowed: bool (pode operar)
+    - reason: str (motivo)
+    - size: int (tamanho da posição)
+    - tp: float (take-profit)
+    - sl: float (stop-loss)
+    - risk_score: float (0-1, risco normalizado)
+    """
     symbol: str
     timestamp_ms: int
     permitido: bool
@@ -146,7 +170,14 @@ class RiskDecision:
     sl: float = 0.0
     risk_score: float = 0.0
     cooldown_restante: float = 0.0
+    # Novos campos (Fase 12)
+    risk_level: str = "normal"      # normal, cauta, bloqueado
+    risk_components: dict = None     # {protecao: resultado}
     schema_version: str = "1.0"
+    
+    def __post_init__(self):
+        if self.risk_components is None:
+            self.risk_components = {}
 
 
 @dataclass

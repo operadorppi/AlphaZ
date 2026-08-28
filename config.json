@@ -1,7 +1,7 @@
 {
     "base_dir": "D:\\MarketData\\Profit",
     "save_dir": "D:\\MarketData\\mimo",
-    "ml_modelo": "D:\\MarketData\\mimo\\modelo_lgbm_v4_limpo.pkl",
+    "ml_modelo": "D:\\MarketData\\mimo\\26\\modelo_lgbm_v4_limpo.pkl",
     "ml_threshold": 0.6,
     "web": {
         "host": "127.0.0.1",
@@ -40,19 +40,19 @@
     "normalizar_score": false,
     "horarios": {
         "abertura_fim": [
-            10,
+            9,
             0
         ],
         "almoco_inicio": [
-            12,
+            99,
             0
         ],
         "almoco_fim": [
-            13,
-            30
+            99,
+            0
         ],
         "fechamento": [
-            16,
+            18,
             30
         ]
     },

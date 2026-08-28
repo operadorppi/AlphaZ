@@ -13,6 +13,7 @@ O SignalEngine NÃO conhece posição nem risco.
 Ele recebe features e produz (lado, score, confianca, motivos, contrib).
 """
 
+import math
 import time
 import logging
 from collections import OrderedDict
@@ -22,6 +23,9 @@ from features import (
     fase_sessao, dias_ate_vencimento, classificar_corretora,
     EWMAZScore,
 )
+from features.feature_registry import REGISTRY
+from core.calibration import create_calibration_system
+from dataclasses import asdict
 from core.contracts import Signal
 from features.feature_engine import FeatureEngine
 
@@ -31,29 +35,58 @@ log = logging.getLogger(__name__)
 class SignalEngine:
     """Recebe features, produz sinais. Não conhece posição nem risco."""
 
-    def __init__(self, market_state, learning, regime, feature_engine, risk=None,
-                 config=None, ativo_principal='WINV26', ativo_contexto='WDOU26'):
+    def __init__(self, market_state, learning=None, regime=None, feature_engine=None, risk=None,
+                 config=None, ativo_principal='WINV26', ativo_contexto='WDOU26', scorer=None):
         self.state = market_state
-        self.learning = learning
-        self.regime = regime
+        self.config = config or (market_state.config if market_state and hasattr(market_state, 'config') else {})
+        if learning is not None:
+            self.learning = learning
+        else:
+            from core.learning import Learning
+            self.learning = Learning(config=self.config)
+            
+        if regime is not None:
+            self.regime = regime
+        else:
+            from core.regime_detector import RegimeDetector
+            self.regime = RegimeDetector(config=self.config)
+            
+        if feature_engine is not None:
+            self.feature_engine = feature_engine
+        else:
+            from features.feature_engine import FeatureEngine
+            self.feature_engine = FeatureEngine(self.state, config=self.config)
+
         self.risk = risk
-        self.config = config or {}
         self.ativo_principal = ativo_principal
         self.ativo_contexto = ativo_contexto
+        self.scorer = scorer
 
         self.features = {}
         self.sinais = {}
         self.confianca_ewma = 0.0
+        
+        # Calibration system
+        self.calibration = create_calibration_system(self.config)
         self._score_confirmado = 0.0
         self._sinal_streak = 0
         self._sinal_anterior_bruto = 0
         self._normalizar_score = bool(self.config.get('normalizar_score', False))
         self._zscore_trackers = {}
-        self.feature_engine = feature_engine
+        self._last_seg_calc = {}  # ativo -> ultimo seg com features calculadas
 
     def calcular(self, seg, skip_avaliar=False):
-        """Calcula features do segundo para todos os ativos no buffer."""
+        """Calcula features do segundo para todos os ativos no buffer.
+        Otimização: recalcula apenas se houver trades novos desde o último cálculo.
+        """
         for ativo, negs in list(self.state.buffer.items()):
+            n_negs = len(negs)
+            # Pula se já calculou este seg com a mesma quantidade de negócios
+            cache_key = (ativo, seg, n_negs)
+            if self._last_seg_calc.get(ativo) == cache_key:
+                continue
+            self._last_seg_calc[ativo] = cache_key
+
             f = self.feature_engine.processar_lote(ativo, negs, seg)
             if not f:
                 continue
@@ -65,6 +98,17 @@ class SignalEngine:
                 while len(self.state.features_por_seg) > max_feat:
                     self.state.features_por_seg.popitem(last=False)
             self.state.historico[ativo].append(f)
+            
+            # Validação de registry (uma vez por sessão)
+            if not hasattr(self, '_registry_validado'):
+                self._registry_validado = True
+                cols = [k for k in f.keys() if not k.startswith('_')]
+                result = REGISTRY.validate_dataset(cols)
+                if not result['valid']:
+                    log.warning(f'[REGISTRY] Features nao registradas: {result["unknown_features"]}')
+                    log.warning(f'[REGISTRY] Features nao-causais: {result["non_causal_features"]}')
+                else:
+                    log.info(f'[REGISTRY] {result["registered"]}/{result["total_features"]} features validadas')
 
             if not skip_avaliar:
                 self.avaliar(ativo, f)
@@ -80,6 +124,33 @@ class SignalEngine:
                 tr['book_imb'].add(abs(bs['imb']), ts_now)
             if f['preco_fim'] > 0:
                 tr['range'].atualizar(f['preco_fim'], ts_now)
+                ri = tr['range'].get_estado()
+                f['range_estado'] = ri['estado']
+                f['range_topo'] = ri['topo']
+                f['range_fundo'] = ri['fundo']
+                f['range_amplitude'] = ri['amplitude']
+                f['range_testes_topo'] = ri['testes_topo']
+                f['range_testes_fundo'] = ri['testes_fundo']
+
+            # === DADOS INSTITUCIONAIS (via InstitutionalContext) ===
+            preco = f.get('preco_fim', 0)
+            vol = f.get('vol_total', 0)
+            inst = tr.get('inst_context')
+            if inst and preco > 0:
+                # OHLC do dia
+                oh = self.state.ohlc.get(ativo, {})
+                # Atualiza contexto institucional
+                inst.update(ativo, preco, vol, ohlc=oh if oh else None)
+                # Atualiza ajuste do scorer se disponível
+                if hasattr(self, '_app') and self._app and hasattr(self._app, 'scorer'):
+                    scorer = self._app.scorer
+                    if scorer and hasattr(scorer, 'ajuste_anterior_oficial'):
+                        adj = scorer.ajuste_anterior_oficial.get(ativo)
+                        if adj and adj > 0:
+                            inst.set_ajuste(ativo, adj)
+                # Computa todas as features de contexto
+                ctx_feats = inst.compute(ativo, preco)
+                f.update(ctx_feats)
 
     def avaliar(self, ativo, f):
         """Avalia features e produz score + sinal.
@@ -93,7 +164,7 @@ class SignalEngine:
         vol = f['vol_total']
         preco = f['preco_fim']
         acel = f.get('aceleracao', 0.0)
-        hist = self.state.historico.get(ativo, [])
+        hist = list(self.state.historico.get(ativo, []))
 
         tr = self.state.trackers[ativo]
         p_aggr = self.config.get('percentil_aggr', 0.85)
@@ -175,14 +246,39 @@ class SignalEngine:
         score, regime = result[0], result[1]
         estrategia = result[2] if len(result) > 2 else {}
 
-        # ML Score
+        # ML Score + Calibration (Fase 11)
         ml_prob = 0.5
-        if hasattr(self, 'scorer') and self.scorer and ativo in getattr(self.scorer, 'prob', {}):
-            ml_prob = self.scorer.prob[ativo]
-            ml_threshold = self.config.get('ml_threshold', 0.6)
-            ml_score = (ml_prob - 0.5) * 2
-            score = 0.6 * score + 0.4 * ml_score * 3.0
-            motivos.append(f'ML={ml_prob:.2f}')
+        if hasattr(self, 'scorer') and self.scorer:
+            try:
+                prob_dict = getattr(self.scorer, 'prob', {})
+                if isinstance(prob_dict, dict) and ativo in prob_dict:
+                    val = prob_dict[ativo]
+                    if isinstance(val, (int, float)) and not math.isnan(val):
+                        ml_prob = float(val)
+                        
+                        # Separar MODEL PROBABILITY de TRADING DECISION
+                        regime_str = f.get('regime', 'lateral')
+                        decision = self.calibration.calibration.separate(
+                            ml_prob=ml_prob,
+                            regime=regime_str,
+                            confianca=self.confianca_ewma,
+                            score_heuristico=score,
+                        )
+                        
+                        # Usar probabilidade calibrada para scoring
+                        calibrated_prob = decision['model_probability']
+                        ml_score = (calibrated_prob - 0.5) * 2
+                        score = 0.6 * score + 0.4 * ml_score * 3.0
+                        motivos.append(f'ML={calibrated_prob:.2f}(cal)')
+                        
+                        # Se ML e heurística discordam, reduzir confiança
+                        if decision['trading_decision'] and sinal != 0:
+                            ml_dir = 1 if decision['trading_decision'] == 'C' else -1
+                            if ml_dir != sinal:
+                                score *= 0.7  # Penalidade por discordância
+                                motivos.append('ML_DISCORDA')
+            except Exception as e:
+                log.warning(f"[SIGNAL] Erro ao acessar prob do scorer: {e}")
 
         # Sinal
         sinal = 0
@@ -233,6 +329,8 @@ class SignalEngine:
         lado_str = 'C' if sinal > 0 else ('V' if sinal < 0 else '')
         
         sig_obj = Signal(
+            symbol=ativo,
+            timestamp_ms=int(f.get('time_ms', time.time() * 1000)),
             lado=lado_str,
             score=round(score, 3),
             confianca=round(self.confianca_ewma, 3), # Usamos a EWMA como confiança principal
@@ -244,13 +342,42 @@ class SignalEngine:
             horizonte=60
         )
         self.sinais[ativo] = sig_obj
-
+        
+        # Decision Journal: registrar cada sinal produzido
+        if hasattr(self, '_app') and self._app and hasattr(self._app, 'journal'):
+            journal = self._app.journal
+            ctx_feats = {}
+            for k in ['dist_vwap_pts', 'dist_abertura_pts', 'spread', 'ofi', 'microprice']:
+                if k in f:
+                    ctx_feats[k] = f[k]
+            # Top 5 features por contribuição
+            top_feat = {c[0]: round(c[1], 4) for c in contrib[:5] if len(c) >= 2}
+            
+            entry = DecisionEntry(
+                ts_ms=int(f.get('time_ms', time.time() * 1000)),
+                ativo=ativo,
+                acao='SINAL',
+                lado=lado_str,
+                preco=preco,
+                score=round(score, 3),
+                confianca=round(self.confianca_ewma, 3),
+                ml_prob=round(ml_prob, 3),
+                sinal=sinal,
+                regime=f.get('regime', 'lateral'),
+                regime_info=f.get('regime_info', {}),
+                tp=tp, sl=sl,
+                motivos=motivos or ['neutro'],
+                features_relevantes=top_feat,
+                preco_ref=preco,
+                **ctx_feats,
+            )
+            journal.registrar(entry)
+        
         return sig_obj
 
     def get_features(self):
-        """Retorna features com regime e OHLC."""
-        import copy
-        feat = copy.deepcopy(self.features)
+        """Retorna features com regime e OHLC. Usa shallow copy (10x mais rápido que deepcopy)."""
+        feat = {k: dict(v) if isinstance(v, dict) else v for k, v in self.features.items()}
         for ativo, f in feat.items():
             if ativo.startswith('_'):
                 continue
@@ -261,11 +388,46 @@ class SignalEngine:
                 f['regime_info'] = ri
             if ativo in self.state.ohlc:
                 oh = self.state.ohlc[ativo]
-                f['abertura_dia'] = oh['abertura']
-                f['maxima_dia'] = oh['maxima']
-                f['minima_dia'] = oh['minima']
-                f['fechamento_dia'] = oh['fechamento']
+                f['abertura_dia'] = oh.get('abertura', 0)
+                f['maxima_dia'] = oh.get('maxima', 0)
+                f['minima_dia'] = oh.get('minima', 0)
+                f['fechamento_dia'] = oh.get('fechamento', 0)
+            # Contexto institucional (sempre, mesmo sem trades novos)
+            tr = self.state.trackers.get(ativo, {})
+            inst = tr.get('inst_context') if isinstance(tr, dict) else None
+            preco = f.get('preco_fim', 0)
+            vol = f.get('vol_total', 0)
+            if inst and preco > 0:
+                oh = self.state.ohlc.get(ativo, {})
+                inst.update(ativo, preco, vol, ohlc=oh if oh else None)
+                # Ajuste do scorer
+                if hasattr(self, '_app') and self._app and hasattr(self._app, 'scorer'):
+                    scorer = self._app.scorer
+                    if scorer and hasattr(scorer, 'ajuste_anterior_oficial'):
+                        adj = scorer.ajuste_anterior_oficial.get(ativo)
+                        if adj and adj > 0:
+                            inst.set_ajuste(ativo, adj)
+                ctx_feats = inst.compute(ativo, preco)
+                f.update(ctx_feats)
+            # Range (se disponível)
+            rng = tr.get('range') if isinstance(tr, dict) else None
+            if rng and hasattr(rng, 'get_estado'):
+                ri2 = rng.get_estado()
+                f['range_estado'] = ri2.get('estado', 'indefinido')
+                f['range_topo'] = ri2.get('topo', 0)
+                f['range_fundo'] = ri2.get('fundo', 0)
+                f['range_amplitude'] = ri2.get('amplitude', 0)
+                f['range_testes_topo'] = ri2.get('testes_topo', 0)
+                f['range_testes_fundo'] = ri2.get('testes_fundo', 0)
         return feat
 
     def get_sinais(self):
-        return dict(self.sinais)
+        out = {}
+        for k, v in self.sinais.items():
+            if hasattr(v, '__dataclass_fields__'):
+                d = asdict(v)
+                d['sinal'] = 1 if v.lado == 'C' else (-1 if v.lado == 'V' else 0)
+                out[k] = d
+            else:
+                out[k] = v
+        return out

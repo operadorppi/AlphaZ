@@ -63,6 +63,9 @@ class ProfitRTDAdapter(MarketDataSource):
             self._srv = srv
 
             # 2. Descoberta de Ativos
+            # Nota (v10.2): o servidor RTD do ProfitChart pode crashar (Access Violation)
+            # em tópicos de campo de janelas corrompidas. Cada ConnectData deve ser
+            # tolerante a falha e o pump precisa rodar entre janelas — padrão do legado.
             deadline = time.perf_counter() + 3.0
             while time.perf_counter() < deadline:
                 self.com_client.PumpEvents(0.1)
@@ -70,16 +73,27 @@ class ProfitRTDAdapter(MarketDataSource):
             ativos_alvo = self.config.get("ativos", [])
             for i in range(12): # MAX_JANELAS_RTD
                 for kind, prefix in (("book", "BOOK"), ("tt", "T&T")):
-                    tid, val = _mw._connect(srv, [f"{prefix}{i}", "INFO", "ATV"])
-                    v = _mw._normalizar_simbolo(val)
-                    if v and v in ativos_alvo:
-                        if kind == "book": self._book_map[i] = v
-                        else: self._tt_map[i] = v
+                    try:
+                        tid, val = _mw._connect(srv, [f"{prefix}{i}", "INFO", "ATV"])
+                        v = _mw._normalizar_simbolo(val)
+                        if v and v in ativos_alvo:
+                            if kind == "book": self._book_map[i] = v
+                            else: self._tt_map[i] = v
+                    except Exception:
+                        pass
+                self.com_client.PumpEvents(0.01)
 
             # 3. Assinatura de Tópicos
             self._assinar_topicos()
-            log.info(f"[RTD] Conectado. Ativos: {list(set(self._tt_map.values()))}")
-            return True
+            n_tt = sum(1 for info in self._topic_map.values() if info[0] == "tt")
+            n_book = len(self._topic_map) - n_tt
+            log.info(
+                f"[RTD] Conectado. Ativos T&T: {list(set(self._tt_map.values()))} | "
+                f"tópicos: tt={n_tt} book={n_book}"
+            )
+            # Só considera conectado se houver T&T assinado (fonte do trading).
+            # Janelas BOOK quebradas não devem derrubar o motor.
+            return n_tt > 0
         except Exception as e:
             log.error(f"[RTD] Falha na conexão: {e}")
             return False
@@ -88,18 +102,43 @@ class ProfitRTDAdapter(MarketDataSource):
         import motor_web as _mw
         BK_FIELDS = ('OCP', 'VOC', 'ACP', 'OVD', 'VOV', 'AVD')
         TT_FIELDS = ('DAT', 'PRE', 'QUL', 'AGR', 'ACP', 'AVD')
+
+        # Linhas vêm da seção 'rtd' do config (ex.: 500/500). Assinar mais linhas
+        # do que a janela RTD suporta faz o servidor crashar (Access Violation).
+        rtd_cfg = self.config.get('rtd') or {}
+        book_linhas = int(rtd_cfg.get('book_linhas', 60))
+        tt_linhas = int(rtd_cfg.get('tt_linhas', 1000))
         
+        # Assinatura resiliente: cada ConnectData é protegido (o servidor RTD pode
+        # crashar com Access Violation em janelas corrompidas) e o pump roda entre
+        # janelas para o servidor se recuperar. Tópicos que falham são pulados.
         for j_idx, sym in self._book_map.items():
-            for linha in range(self.config.get('book_linhas', 60)):
+            ok = fail = 0
+            for linha in range(book_linhas):
                 for field in BK_FIELDS:
-                    tid, _ = _mw._connect(self._srv, [f"BOOK{j_idx}", field, str(linha)])
-                    self._topic_map[tid] = ("book", sym, field, linha)
+                    try:
+                        tid, _ = _mw._connect(self._srv, [f"BOOK{j_idx}", field, str(linha)])
+                        self._topic_map[tid] = ("book", sym, field, linha)
+                        ok += 1
+                    except Exception:
+                        fail += 1
+            self.com_client.PumpEvents(0.05)
+            if fail:
+                log.warning(f"[RTD] BOOK{j_idx} ({sym}): {ok} ok / {fail} falhas (janela corrompida?)")
 
         for j_idx, sym in self._tt_map.items():
-            for linha in range(self.config.get('tt_linhas', 1000)):
+            ok = fail = 0
+            for linha in range(tt_linhas):
                 for field in TT_FIELDS:
-                    tid, _ = _mw._connect(self._srv, [f"T&T{j_idx}", field, str(linha)])
-                    self._topic_map[tid] = ("tt", sym, field, linha)
+                    try:
+                        tid, _ = _mw._connect(self._srv, [f"T&T{j_idx}", field, str(linha)])
+                        self._topic_map[tid] = ("tt", sym, field, linha)
+                        ok += 1
+                    except Exception:
+                        fail += 1
+            self.com_client.PumpEvents(0.05)
+            if fail:
+                log.warning(f"[RTD] T&T{j_idx} ({sym}): {ok} ok / {fail} falhas")
 
     def disconnect(self) -> None:
         self._shutdown = True
@@ -144,6 +183,8 @@ class ProfitRTDAdapter(MarketDataSource):
                         # Se detectou algo novo (frequência maior que a vista antes)
                         # [Lógica de contagem completa em motor_web aplicada aqui]
                         
+                        qtd = _mw.fint(cell.get('QUL'))
+                        if qtd <= 0: continue  # RTD envia qtd=0 para ativos sem dados reais
                         tms = _mw.parse_hms_ms(cell.get('DAT'))
                         trade = TradeEvent(
                             symbol=sym, timestamp_ms=tms, price=pre,
@@ -152,7 +193,7 @@ class ProfitRTDAdapter(MarketDataSource):
                             buyer=sstr(cell.get('ACP')), seller=sstr(cell.get('AVD')),
                             received_at=int(time.time()*1000)
                         )
-                        yield MarketEvent(type='TRADE', payload=trade, timestamp_ms=tms)
+                        yield MarketEvent(type='TRADE', payload=trade, timestamp_ms=tms, symbol=sym)
 
                 elif kind == "book":
                     self._book_cells[sym][linha][field] = val
@@ -162,10 +203,10 @@ class ProfitRTDAdapter(MarketDataSource):
                     if agora - self._last_book_yield[sym] > 0.25:
                         self._last_book_yield[sym] = agora
                         bids, asks = [], []
-                        for l_idx in range(self.config.get('book_linhas', 60)):
+                        for l_idx in range(int((self.config.get('rtd') or {}).get('book_linhas', 60))):
                             c = self._book_cells[sym][l_idx]
-                            if c.get('OCP'): bids.append(BookLevel(price=_mw.fnum(c['OCP']), volume=_mw.fint(c['VOC']), broker=sstr(c['ACP'])))
-                            if c.get('OVD'): asks.append(BookLevel(price=_mw.fnum(c['OVD']), volume=_mw.fint(c['VOV']), broker=sstr(c['AVD'])))
+                            if c.get('OCP'): bids.append(BookLevel(price=_mw.fnum(c['OCP']), volume=_mw.fint(c.get('VOC')), broker=sstr(c.get('ACP'))))
+                            if c.get('OVD'): asks.append(BookLevel(price=_mw.fnum(c['OVD']), volume=_mw.fint(c.get('VOV')), broker=sstr(c.get('AVD'))))
                         
                         yield MarketEvent(
                             type='BOOK',
@@ -173,7 +214,8 @@ class ProfitRTDAdapter(MarketDataSource):
                                 symbol=sym, timestamp_ms=int(agora*1000),
                                 bids=bids, asks=asks, received_at=int(agora*1000)
                             ),
-                            timestamp_ms=int(agora*1000)
+                            timestamp_ms=int(agora*1000),
+                            symbol=sym
                         )
             
             # Após o primeiro RefreshData bem sucedido, desativa pendência de baseline

@@ -242,6 +242,20 @@ td.r,th.r{text-align:right}
 
 <div class="grid cols">
   <div class="panel">
+    <h3>CONTEXTO DE MERCADO</h3>
+    <div class="grid kpis" style="grid-template-columns:repeat(auto-fit,minmax(110px,1fr))">
+      <div class="kpi"><div class="l">VWAP</div><div class="v" id="m_vwap">—</div><div class="s">dist <span id="m_dist_vwap" class="mono">—</span></div></div>
+      <div class="kpi"><div class="l">ABERTURA</div><div class="v" id="m_abertura">—</div><div class="s">dist <span id="m_dist_abertura" class="mono">—</span></div></div>
+      <div class="kpi"><div class="l">MÁXIMA</div><div class="v" id="m_maxima" style="color:var(--green)">—</div><div class="s">dist <span id="m_dist_maxima" class="mono">—</span></div></div>
+      <div class="kpi"><div class="l">MÍNIMA</div><div class="v" id="m_minima" style="color:var(--red)">—</div><div class="s">dist <span id="m_dist_minima" class="mono">—</span></div></div>
+      <div class="kpi"><div class="l">AJUSTE</div><div class="v" id="m_ajuste">—</div><div class="s">dist <span id="m_dist_ajuste" class="mono">—</span></div></div>
+      <div class="kpi"><div class="l">AMPLITUDE</div><div class="v" id="m_amplitude">—</div><div class="s">pontos</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="grid cols">
+  <div class="panel">
     <h3>PADRÕES DE MERCADO <span class="badge" id="pd_count">—</span></h3>
     <div id="padroes_body" style="font-size:12px;color:var(--muted)">—</div>
   </div>
@@ -483,6 +497,35 @@ function render(){
   }
   if(m){
     setK('m_pnl', sgn(m.pnl_dia)+fmt(m.pnl_dia,1), m.pnl_dia);
+  }
+
+  // ---- contexto de mercado ----
+  const f = (ST.feats && ST.feats[PR]) || {};
+  if(f.vwap){
+    setK('m_vwap', fmt(f.vwap,0), null);
+    setK('m_dist_vwap', sgn(f.dist_vwap_pts)+fmt(f.dist_vwap_pts,0)+'pts', f.dist_vwap_pts);
+    $('m_vwap').style.color = f.acima_vwap ? 'var(--green)' : 'var(--red)';
+  }
+  if(f.abertura_dia){
+    setK('m_abertura', fmt(f.abertura_dia,0), null);
+    setK('m_dist_abertura', sgn(f.dist_abertura_pts)+fmt(f.dist_abertura_pts,0)+'pts', f.dist_abertura_pts);
+    $('m_abertura').style.color = f.dist_abertura_pts>=0 ? 'var(--green)' : 'var(--red)';
+  }
+  if(f.maxima_dia){
+    setK('m_maxima', fmt(f.maxima_dia,0), null);
+    setK('m_dist_maxima', fmt(f.dist_maxima_pts,0)+'pts', null);
+  }
+  if(f.minima_dia){
+    setK('m_minima', fmt(f.minima_dia,0), null);
+    setK('m_dist_minima', fmt(f.dist_minima_pts,0)+'pts', null);
+  }
+  if(f.amplitude_dia_pts){
+    setK('m_amplitude', fmt(f.amplitude_dia_pts,0), null);
+  }
+  if(f.dist_ajuste_pts != null && f.dist_ajuste_pts !== 0){
+    setK('m_ajuste', fmt(f.dist_ajuste_pts + (f.preco_fim||0),0), null);
+    setK('m_dist_ajuste', sgn(f.dist_ajuste_pts)+fmt(f.dist_ajuste_pts,0)+'pts', f.dist_ajuste_pts);
+    $('m_ajuste').style.color = f.dist_ajuste_pts>=0 ? 'var(--green)' : 'var(--red)';
   }
 
   // ---- corretoras ----

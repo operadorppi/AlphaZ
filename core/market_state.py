@@ -28,7 +28,7 @@ from core.utils import fnum, fint, sstr
 from features import (
     PercentilTracker, RangeTracker, AccumulationTracker,
     OFITracker, BookLevelFeatures, CrossAssetEngine, PadroesMemoria,
-    classificar_corretora,
+    InstitutionalContext, classificar_corretora,
 )
 
 log = logging.getLogger(__name__)
@@ -37,11 +37,11 @@ log = logging.getLogger(__name__)
 class EstadoAtivo:
     """Estado bruto do RTD por ativo (book + T&T rows + dedup)."""
 
-    def __init__(self, sym, config=None):
+    def __init__(self, sym="WINV26", config=None):
         self.sym = sym
         self.config = config or {}
         # Suporte a 500 níveis conforme configurado no rtd.book_linhas
-        tamanho_book = self.config.get("rtd", {}).get("book_linhas", 500)
+        tamanho_book = self.config.get("rtd", {}).get("book_linhas", self.config.get("book_split", 500))
         self.book_bid = [{} for _ in range(tamanho_book)]
         self.book_ask = [{} for _ in range(tamanho_book)]
         self.tt_rows = [{} for _ in range(self.config.get("tt_linhas", 1000))]
@@ -69,6 +69,13 @@ class MarketState:
         self._lock = threading.RLock()
         self.config = config or {}
         self.base_dir = base_dir or self.config.get('save_dir')
+        self.market_state = self
+
+        book_split = self.config.get('book_split', 30)
+        if book_split < 0:
+            raise ValueError(f"book_split negativo: {book_split}")
+        self.book_bid = [{} for _ in range(book_split)]
+        self.book_ask = [{} for _ in range(book_split)]
 
         # Estado de mercado
         self.buffer = defaultdict(list)         # negocios do segundo atual
@@ -114,6 +121,7 @@ class MarketState:
                 'acumulacao': AccumulationTracker(),
                 'ofi': OFITracker(niveis=5),
                 'book_level': BookLevelFeatures(),
+                'inst_context': InstitutionalContext(),
             }
         self.trackers = defaultdict(trackers_factory)
         
@@ -148,7 +156,7 @@ class MarketState:
         """
         if preco <= 0:
             return False
-        for prefixo, (lo, hi) in CONFIG.get("faixas_preco", {}).items():
+        for prefixo, (lo, hi) in self.config.get("faixas_preco", {}).items():
             if sym.upper().startswith(prefixo):
                 if not (lo <= preco <= hi):
                     self._anomalias_preco[sym] += 1
@@ -197,15 +205,43 @@ class MarketState:
 
     # ---- Alimentar negócios ----
 
-    def alimentar_negocio(self, event: TradeEvent) -> bool:
-        """Adiciona um negócio ao estado através do contrato TradeEvent."""
-        ativo = event.symbol
-        tms = event.timestamp_ms
-        preco = event.price
-        qtd = event.quantity
-        agr = event.aggressor
-        comp = event.buyer
-        vend = event.seller
+    def alimentar_negocio(self, *args, **kwargs) -> bool:
+        """Adiciona um negócio ao estado através do contrato TradeEvent ou argumentos individuais."""
+        if len(args) == 1 and isinstance(args[0], TradeEvent):
+            event = args[0]
+            ativo = event.symbol
+            tms = event.timestamp_ms
+            preco = event.price
+            qtd = event.quantity
+            agr = event.aggressor
+            comp = event.buyer
+            vend = event.seller
+        elif len(args) >= 5 and isinstance(args[0], str):
+            ativo = args[0]
+            tms = args[1]
+            preco = args[2]
+            qtd = args[3]
+            agr = args[4]
+            comp = args[5] if len(args) > 5 else kwargs.get('compradora', '')
+            vend = args[6] if len(args) > 6 else kwargs.get('vendedora', '')
+        else:
+            event = kwargs.get('event')
+            if event:
+                ativo = event.symbol
+                tms = event.timestamp_ms
+                preco = event.price
+                qtd = event.quantity
+                agr = event.aggressor
+                comp = event.buyer
+                vend = event.seller
+            else:
+                ativo = kwargs.get('ativo') or kwargs.get('symbol')
+                tms = kwargs.get('ts_ms') or kwargs.get('timestamp_ms', 0)
+                preco = kwargs.get('preco') or kwargs.get('price', 0.0)
+                qtd = kwargs.get('qtd') or kwargs.get('quantity', 0)
+                agr = kwargs.get('agressor') or kwargs.get('aggressor', 'neutro')
+                comp = kwargs.get('compradora') or kwargs.get('buyer', '')
+                vend = kwargs.get('vendedora') or kwargs.get('seller', '')
 
         if not self.preco_plausivel(ativo, preco):
             return False
@@ -281,8 +317,26 @@ class MarketState:
 
         return True
 
-    def alimentar_book(self, snapshot: BookSnapshot, ofi_data=None):
-        """Alimenta snapshot do book através do contrato BookSnapshot."""
+    def alimentar_book(self, *args, **kwargs):
+        """Alimenta snapshot do book através do contrato BookSnapshot ou parâmetros legados."""
+        if len(args) >= 1 and isinstance(args[0], str):
+            ativo = args[0]
+            snap = args[1] if len(args) > 1 else kwargs.get('snap', {})
+            bid_vol = args[2] if len(args) > 2 else kwargs.get('bid_vol', 0)
+            ask_vol = args[3] if len(args) > 3 else kwargs.get('ask_vol', 0)
+            ofi_data = args[4] if len(args) > 4 else kwargs.get('ofi_data')
+            estado = kwargs.get('estado')
+            if estado is not None:
+                estado.book_ultimo_snap = (bid_vol, ask_vol, ())
+            with self._lock:
+                self.book_snap_ant[ativo] = snap
+            return True
+
+        snapshot = args[0] if len(args) > 0 else kwargs.get('snapshot')
+        ofi_data = args[1] if len(args) > 1 else kwargs.get('ofi_data')
+        if snapshot is None:
+            return False
+
         ativo = snapshot.symbol
         
         # Transforma contrato em formato legado para compatibilidade com trackers existentes
@@ -414,7 +468,7 @@ class MarketState:
             for ativo, bs in self.book_stats.items():
                 bl = bs.get('book_level')
                 ca_data = {}
-                if ativo == ATIVO_PRINCIPAL:
+                if ativo == self.config.get('ativo_principal', 'WINV26'):
                     ca_data = self.cross_engine.calcular()
                 result[ativo] = {
                     'book_level': bl or {},

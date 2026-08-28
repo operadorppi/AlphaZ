@@ -10,13 +10,13 @@ import sys, os, json, pickle, time, argparse
 import numpy as np
 import pandas as pd
 from sklearn.metrics import accuracy_score, roc_auc_score, confusion_matrix
-from datetime import date
+from datetime import date, datetime
 
 PARQUET_PATH = r'D:\MarketData\mimo\dataset_final_v2_win_v914.parquet'
 # v9.32: dataset enriquecido com ajuste oficial + VWAP + regime
 PARQUET_PATH_COMPL = r'D:\MarketData\mimo\26\dataset_final_completo.parquet'
-OLD_MODEL_PATH = r'D:\MarketData\mimo\modelo_lgbm_v3.pkl'
-NEW_MODEL_PATH = r'D:\MarketData\mimo\modelo_lgbm_v4_limpo.pkl'
+OLD_MODEL_PATH = r'D:\MarketData\mimo\26\modelo_lgbm_v3.pkl'
+NEW_MODEL_PATH = r'D:\MarketData\mimo\26\modelo_lgbm_v4_limpo.pkl'
 
 # Features com leakage (BLOQUEADAS)
 LEAKAGE_FEATURES = {'preco_saida', 'duracao_label_ms'}
@@ -116,6 +116,16 @@ def main():
     # Features limpas (SEM leakage)
     X_cols = colunas_validas(df)
     print(f'\nFeatures validas: {len(X_cols)}')
+    
+    # Validação contra Feature Registry
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from features.feature_registry import REGISTRY
+    reg_result = REGISTRY.validate_dataset(X_cols)
+    if not reg_result['valid']:
+        print(f'  [REGISTRY] Features nao registradas: {reg_result["unknown_features"]}')
+        print(f'  [REGISTRY] Features nao-causais: {reg_result["non_causal_features"]}')
+    else:
+        print(f'  [REGISTRY] {reg_result["registered"]}/{reg_result["total_features"]} features validadas')
     
     # Labels: binario (TP=1, nao-TP=0)
     y_col = 'label'
@@ -254,6 +264,90 @@ def main():
             'leakage_removido': ['preco_saida', 'duracao_label_ms'],
         }, f)
     print(f'\nNovo modelo salvo: {args.modelo_out}')
+    
+    # ============================================================
+    # MODEL REGISTRY (Fase 9)
+    # ============================================================
+    from ml.model_metadata import ModelMetadata, DatasetInfo, FeatureSet, LabelConfig, TrainConfig, ModelMetrics
+    from ml.model_validation import ModelValidator
+    from ml.model_registry import ModelRegistry
+    
+    # Criar metadados
+    ds_info = DatasetInfo(
+        path=args.dataset,
+        n_rows=len(df),
+        n_features=len(X_cols),
+        n_labels_pos=int(y_train.sum()),
+        n_labels_neg=int((y_train == 0).sum()),
+        ativo=args.ativo,
+    )
+    try:
+        ds_info.compute_hash(args.dataset)
+    except Exception:
+        pass
+    
+    now = datetime.now()
+    model_id = f'model_{now.strftime("%Y%m%d_%H%M%S")}'
+    
+    metadata = ModelMetadata(
+        model_id=model_id,
+        model_name=f'{nome_modelo}_{args.ativo}',
+        version='1.0.0',
+        algorithm=nome_modelo,
+        dataset=ds_info,
+        features=FeatureSet(names=X_cols, version='1.0'),
+        labels=LabelConfig(
+            method='triple_barrier', tp_pts=20, sl_pts=15,
+            max_holding_s=30, purge_s=5, embargo_s=30,
+        ),
+        train_config=TrainConfig(
+            algorithm=nome_modelo,
+            n_estimators=getattr(new_model, 'n_estimators', 300),
+            learning_rate=0.05,
+        ),
+        metrics=ModelMetrics(
+            accuracy=round(acc_new, 4),
+            auc_roc=round(auc_new, 4) if auc_new else 0,
+            ece=round(ece_new, 4),
+        ),
+        train_date=now.strftime('%Y-%m-%d'),
+        train_start=str(TREINO_DIAS[0]) if TREINO_DIAS else '',
+        train_end=str(TREINO_DIAS[-1]) if TREINO_DIAS else '',
+        model_path=args.modelo_out,
+    )
+    
+    # Feature importance
+    if hasattr(new_model, 'feature_importances_'):
+        imp = pd.Series(new_model.feature_importances_, index=X_cols)
+        metadata.feature_importance = {k: int(v) for k, v in imp.sort_values(ascending=False).items()}
+    
+    # Validar
+    validator = ModelValidator()
+    report = validator.validate(metadata)
+    print(f'\n[REGISTRY] Validacao: {report["overall_status"]}')
+    print(f'  Checks: {len(report["checks"])} | Warnings: {len(report["warnings"])}')
+    for rec in report['recommendations'][:3]:
+        print(f'  -> {rec}')
+    
+    # Registrar
+    save_dir = args.save_dir if hasattr(args, 'save_dir') else os.path.dirname(args.modelo_out)
+    registry = ModelRegistry(save_dir)
+    registry.register(metadata, model_path=args.modelo_out, validation_report=report)
+    print(f'\n[REGISTRY] Modelo registrado: {model_id}')
+    print(f'  Total modelos: {registry.count()}')
+    
+    # Auto-promover se validacao passou
+    if report['overall_status'] in ('PASS', 'WARN'):
+        registry.promote(model_id, reason='Auto-promovido apos treino')
+        print(f'  [REGISTRY] Promovido para producao!')
+    else:
+        print(f'  [REGISTRY] Nao promovido (validacao: {report["overall_status"]})')
+    
+    # Salvar relatorio de validacao
+    val_path = os.path.join(os.path.dirname(args.modelo_out), f'validation_{model_id}.json')
+    with open(val_path, 'w', encoding='utf-8') as f:
+        json.dump(report, f, indent=2, ensure_ascii=False)
+    print(f'  Relatorio: {val_path}')
 
 
 if __name__ == '__main__':

@@ -251,8 +251,8 @@ class Learning:
             self.morto_por_regime = defaultdict(set)
             for r, m_list in morto_reg.items():
                 self.morto_por_regime[r] = set(m_list)
-            self.resultados = deque(st.get('resultados', [])[-500:], maxlen=5000)
-            self.previsoes = deque(st.get('previsoes', [])[-500:], maxlen=5000)
+            self.resultados.extend(st.get('resultados', [])[-500:])
+            self.previsoes.extend(st.get('previsoes', [])[-500:])
             self._recalc_acuracia()
             log.info(f"[LEARN] estado carregado: {len(self.resultados)} resultados, "
                      f"{len(self.morto)} features mortas")

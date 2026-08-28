@@ -331,6 +331,27 @@ class DashboardAPI(BaseHTTPRequestHandler):
 
     app = None  # Referência para App (setado externamente)
     state = None # Referência para DashboardState
+    _snapshot = None  # Cache de dados (refreshed 1x/s)
+    _snapshot_ts = 0.0  # Timestamp do último refresh
+
+    def _get_snapshot(self):
+        """Retorna snapshot cacheado (refreshed 1x/s) para reduzir lock contention."""
+        now = time.time()
+        if DashboardAPI._snapshot is None or (now - DashboardAPI._snapshot_ts) > 1.0:
+            app = self.app
+            DashboardAPI._snapshot = {
+                'features': app.get_features(),
+                'sinais': app.get_sinais(),
+                'posicao': app.get_posicao() or {},
+                'learning': app.get_estatisticas(),
+                'memoria': app.get_memoria(),
+                'metricas': app.calcular_metricas(),
+                'saldo_corretoras': app.get_saldo_corretoras(),
+                'padroes': app.market_state.padroes.get_resumo(),
+                'ml_health': app.scorer.estado_salud() if app.scorer else {},
+            }
+            DashboardAPI._snapshot_ts = now
+        return DashboardAPI._snapshot
 
     def do_GET(self):
         p = urlparse(self.path)
@@ -338,7 +359,7 @@ class DashboardAPI(BaseHTTPRequestHandler):
         app = self.app
 
         if p.path == '/':
-            self._html(DASHBOARD_HTML)
+            self._serve_dashboard_html()
         elif p.path == '/api/status':
             if self.state:
                 self._json(self.state.payload())
@@ -347,35 +368,35 @@ class DashboardAPI(BaseHTTPRequestHandler):
         elif p.path == '/legacy':
             self._html(app.html() if hasattr(app, 'html') else 'legacy mode disabled')
         elif p.path == '/api/book_level':
-            self._json(app.analise.get_book_level())
+            self._json(app.get_book_level())
         elif p.path == '/api/features':
-            f = app.analise.get_features()
+            f = app.get_features()
             from config import ATIVO_PRINCIPAL, ATIVO_CONTEXTO
             f['_principal'] = ATIVO_PRINCIPAL
             f['_contexto'] = ATIVO_CONTEXTO
             self._json(f)
         elif p.path == '/api/sinais':
-            self._json(app.analise.get_sinais())
+            self._json(app.get_sinais())
         elif p.path == '/api/posicao':
-            self._json(app.analise.get_posicao() or {'acao': 'SEM_POSICAO'})
+            self._json(app.get_posicao() or {'acao': 'SEM_POSICAO'})
         elif p.path == '/api/learning':
-            self._json(app.analise.get_estatisticas())
+            self._json(app.get_estatisticas())
         elif p.path == '/api/memoria':
-            self._json(app.analise.get_memoria())
+            self._json(app.get_memoria())
         elif p.path == '/api/book':
-            self._json(app.analise.get_book_stats())
+            self._json(app.get_book_stats())
         elif p.path == '/api/metricas':
-            self._json(app.analise.calcular_metricas())
+            self._json(app.calcular_metricas())
         elif p.path == '/api/resumo':
             from config import ATIVO_PRINCIPAL
             a = params.get('ativo', [ATIVO_PRINCIPAL])[0]
-            self._json(app.analise.get_resumo(a))
+            self._json(app.get_resumo(a))
         elif p.path == '/api/padroes':
-            self._json(app.analise.padroes.get_resumo())
+            self._json(app.market_state.padroes.get_resumo())
         elif p.path == '/api/rtd_health':
             self._json(app.get_rtd_health())
         elif p.path == '/api/saldo_corretoras':
-            self._json(app.analise.get_saldo_corretoras())
+            self._json(app.get_saldo_corretoras())
         elif p.path == '/api/contexto':
             self._json(app.get_contexto_mercado())
         elif p.path == '/api/ml_health':
@@ -384,25 +405,25 @@ class DashboardAPI(BaseHTTPRequestHandler):
             else:
                 self._json({"error": "Scorer not initialized"})
         elif p.path == '/api/historico':
-            self._json(app.analise.get_historico())
+            self._json(app.get_historico())
+        elif p.path == '/api/decisoes':
+            # Decision Journal: últimas decisões
+            decisoes = app.journal.listar(limite=50) if hasattr(app, 'journal') else []
+            self._json([d.to_dict() for d in decisoes])
+        elif p.path.startswith('/api/decisoes/'):
+            # Decision Journal: buscar por ID
+            did = p.path.split('/')[-1]
+            entry = app.journal.buscar(id=did) if hasattr(app, 'journal') else None
+            self._json(entry.to_dict() if entry else {'error': 'not found'})
         elif p.path == '/api/all':
+            # Usa snapshot cacheado (1x/s) para reduzir lock contention no loop principal
+            snap = self._get_snapshot()
             etag = f'"{getattr(app, "revision", 0)}"'
             if self.headers.get('If-None-Match') == etag:
                 self.send_response(304)
                 self.end_headers()
                 return
-
-            self._json({
-                'features': app.analise.get_features(),
-                'sinais': app.analise.get_sinais(),
-                'posicao': app.analise.get_posicao() or {},
-                'learning': app.analise.get_estatisticas(),
-                'memoria': app.analise.get_memoria(),
-                'metricas': app.analise.calcular_metricas(),
-                'saldo_corretoras': app.analise.get_saldo_corretoras(),
-                'padroes': app.analise.padroes.get_resumo(),
-                'ml_health': app.scorer.estado_salud() if app.scorer else {},
-            }, etag=etag)
+            self._json(snap, etag=etag)
         elif p.path == '/health':
             uptime = time.time() - getattr(app, 'tempo_inicio', time.time())
             from config import ATIVO_PRINCIPAL
@@ -411,7 +432,7 @@ class DashboardAPI(BaseHTTPRequestHandler):
                 'uptime_s': round(uptime, 1),
                 'latencia_loop_ms': round(getattr(app, 'latencia_atual_ms', 0), 2),
                 'eventos_total': getattr(app, 'eventos_processados', 0),
-                'negocios_total': app.analise.stats.get(ATIVO_PRINCIPAL, {}).get('n', 0),
+                'negocios_total': app.market_state.stats.get(ATIVO_PRINCIPAL, {}).get('n', 0),
             })
         else:
             self.send_error(404)

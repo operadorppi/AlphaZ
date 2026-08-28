@@ -1,0 +1,67 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+motor_stdout*.log
+.watchdog.lock
+
+# Dados sensíveis (não subir)
+config_local.json
+.env
+
+# Dados de mercado (não subir — muito grandes)
+D:/MarketData/mimo/raw_*.jsonl
+D:/MarketData/mimo/decisoes_*.jsonl
+D:/MarketData/mimo/learning_state.json
+D:/MarketData/mimo/feature_cache/
+D:/MarketData/mimo/26/*.parquet
+D:/MarketData/mimo/26/*.pkl
+D:/MarketData/mimo/26/*.csv
+
+# Modelos ML
+models/
+calibration_state.json
+
+# Test report
+test_report.json
+.feature_registry.json
+
+# Temp
+*.tmp
+*.temp

@@ -18,11 +18,11 @@ class Metrics:
 
     def __init__(self, resultados=None, previsoes=None, pesos=None,
                  feature_hits=None, acuracia=None):
-        self.resultados = resultados or []
-        self.previsoes = previsoes or []
-        self.pesos = pesos or {}
-        self.feature_hits = feature_hits or {}
-        self.acuracia = acuracia or {}
+        self.resultados = resultados if resultados is not None else []
+        self.previsoes = previsoes if previsoes is not None else []
+        self.pesos = pesos if pesos is not None else {}
+        self.feature_hits = feature_hits if feature_hits is not None else {}
+        self.acuracia = acuracia if acuracia is not None else {}
 
     def calcular(self):
         """Calcula métricas agregadas: acuracia, PF, Sharpe, DD, expectancy."""
@@ -70,5 +70,5 @@ class Metrics:
             'acuracia': ac / total if total > 0 else 0,
             'pesos': dict(self.pesos),
             'acuracia_por_feature': dict(self.acuracia),
-            'resultados': list(self.resultados[-20:])
+            'resultados': list(self.resultados)[-20:]
         }
