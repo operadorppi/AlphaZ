@@ -20,11 +20,14 @@ while true; do
     echo "$(date +'%H:%M:%S') - Alterações detectadas! Sincronizando..."
     git add .
     # Verifica se realmente há algo novo para commitar (evita commits vazios)
+    # Verifica se realmente há algo novo para commitar
     if ! git diff --cached --quiet; then
       git commit -m "Auto-sync: $(date +'%Y-%m-%d %H:%M:%S')"
       # Tenta enviar. Se falhar (ex: você mudou algo no PC), tenta baixar e reordenar (rebase) antes de enviar de novo
+      # Tenta enviar. Se falhar, tenta rebase automático para resolver divergências
       git push origin main || (git pull --rebase origin main && git push origin main) || \
       echo "$(date +'%H:%M:%S') - ERRO: Falha no push. Verifique conflitos ou permissões SSH."
+      echo "$(date +'%H:%M:%S') - ERRO: Falha no push. Verifique permissões SSH ou conflitos."
     fi
   fi
   sleep $INTERVALO
