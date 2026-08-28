@@ -13,8 +13,6 @@ echo "Monitor de sincronização iniciado (Cloud -> GitHub)..."
 echo "Acompanhe os logs com: tail -f /home/daytradenofluxo/nohup.out"
 
 while true; do
-  # Verifica mudanças excluindo logs, temporários, compactados e cache do python
-  if [[ -n $(git status -s | grep -vE ".log|.tmp|.tar.gz|__pycache__") ]]; then
   # Verifica mudanças excluindo logs, temporários, compactados, cache e o nohup.out
   CHANGES=$(git status -s | grep -vE ".log|.tmp|.tar.gz|__pycache__|nohup.out")
 
@@ -26,7 +24,6 @@ while true; do
       git commit -m "Auto-sync: $(date +'%Y-%m-%d %H:%M:%S')"
       # Tenta enviar. Se falhar (ex: você mudou algo no PC), tenta baixar e reordenar (rebase) antes de enviar de novo
       git push origin main || (git pull --rebase origin main && git push origin main) || \
-      echo "Erro crítico de sincronização. Verifique conflitos manuais."
       echo "$(date +'%H:%M:%S') - ERRO: Falha no push. Verifique conflitos ou permissões SSH."
     fi
   fi
