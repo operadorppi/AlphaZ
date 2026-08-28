@@ -1,0 +1,503 @@
+{
+  "descricao": "Walk-forward limpo labels v9.14 (v9.20, v9.32 = dataset enriquecido)",
+  "dataset": "D:/MarketData/mimo/26/dataset_final_completo.parquet",
+  "modelo": "LightGBM",
+  "features": 26,
+  "custo_pts": 5.0,
+  "threshold_principal": 0.6,
+  "purge_s": 30,
+  "embargo_s": 30,
+  "target": "binario TP-vs-nao-TP",
+  "folds": [
+    {
+      "fold": 1,
+      "treino_dias": [
+        "2026-08-04",
+        "2026-08-05",
+        "2026-08-06"
+      ],
+      "teste_dia": "2026-08-07",
+      "n_treino": 1354360,
+      "n_teste": 456730,
+      "auc": 0.856,
+      "n_sinais": {
+        "0.5": 0,
+        "0.6": 0,
+        "0.7": 0
+      },
+      "modelo_por_threshold": {
+        "0.5": {
+          "n_trades": 0,
+          "total_pts": 0.0,
+          "expectancy": 0.0,
+          "pf": null,
+          "winrate": 0.0,
+          "dd_pts": 0.0
+        },
+        "0.6": {
+          "n_trades": 0,
+          "total_pts": 0.0,
+          "expectancy": 0.0,
+          "pf": null,
+          "winrate": 0.0,
+          "dd_pts": 0.0
+        },
+        "0.7": {
+          "n_trades": 0,
+          "total_pts": 0.0,
+          "expectancy": 0.0,
+          "pf": null,
+          "winrate": 0.0,
+          "dd_pts": 0.0
+        }
+      },
+      "baseline_threshold0": {
+        "n_trades": 456730,
+        "total_pts": 578372736.0,
+        "expectancy": 1266.334,
+        "pf": 256.1534,
+        "winrate": 0.0074,
+        "dd_pts": -3845.0
+      },
+      "baseline_aleatorio30": {
+        "n_trades": 0,
+        "expectancy_media": 0.0,
+        "total_pts_medio": 0.0,
+        "total_pts_min": 0.0,
+        "total_pts_max": 0.0,
+        "fracao_seeds_atras_do_modelo": 0.0
+      },
+      "baseline_momentum": {
+        "n_trades": 131010,
+        "total_pts": 147913242.0,
+        "expectancy": 1129.0225,
+        "pf": 228.3018,
+        "winrate": 0.0066,
+        "dd_pts": -4345.0
+      }
+    },
+    {
+      "fold": 2,
+      "treino_dias": [
+        "2026-08-04",
+        "2026-08-05",
+        "2026-08-06",
+        "2026-08-07"
+      ],
+      "teste_dia": "2026-08-10",
+      "n_treino": 1811390,
+      "n_teste": 435030,
+      "auc": 0.8642,
+      "n_sinais": {
+        "0.5": 0,
+        "0.6": 0,
+        "0.7": 0
+      },
+      "modelo_por_threshold": {
+        "0.5": {
+          "n_trades": 0,
+          "total_pts": 0.0,
+          "expectancy": 0.0,
+          "pf": null,
+          "winrate": 0.0,
+          "dd_pts": 0.0
+        },
+        "0.6": {
+          "n_trades": 0,
+          "total_pts": 0.0,
+          "expectancy": 0.0,
+          "pf": null,
+          "winrate": 0.0,
+          "dd_pts": 0.0
+        },
+        "0.7": {
+          "n_trades": 0,
+          "total_pts": 0.0,
+          "expectancy": 0.0,
+          "pf": null,
+          "winrate": 0.0,
+          "dd_pts": 0.0
+        }
+      },
+      "baseline_threshold0": {
+        "n_trades": 435030,
+        "total_pts": 573666662.03,
+        "expectancy": 1318.683,
+        "pf": 266.7956,
+        "winrate": 0.0077,
+        "dd_pts": -3395.0
+      },
+      "baseline_aleatorio30": {
+        "n_trades": 0,
+        "expectancy_media": 0.0,
+        "total_pts_medio": 0.0,
+        "total_pts_min": 0.0,
+        "total_pts_max": 0.0,
+        "fracao_seeds_atras_do_modelo": 0.0
+      },
+      "baseline_momentum": {
+        "n_trades": 126790,
+        "total_pts": 160344158.15,
+        "expectancy": 1264.6436,
+        "pf": 255.8219,
+        "winrate": 0.0074,
+        "dd_pts": -5820.0
+      }
+    },
+    {
+      "fold": 3,
+      "treino_dias": [
+        "2026-08-04",
+        "2026-08-05",
+        "2026-08-06",
+        "2026-08-07",
+        "2026-08-10"
+      ],
+      "teste_dia": "2026-08-11",
+      "n_treino": 2246720,
+      "n_teste": 477070,
+      "auc": 0.8217,
+      "n_sinais": {
+        "0.5": 0,
+        "0.6": 0,
+        "0.7": 0
+      },
+      "modelo_por_threshold": {
+        "0.5": {
+          "n_trades": 0,
+          "total_pts": 0.0,
+          "expectancy": 0.0,
+          "pf": null,
+          "winrate": 0.0,
+          "dd_pts": 0.0
+        },
+        "0.6": {
+          "n_trades": 0,
+          "total_pts": 0.0,
+          "expectancy": 0.0,
+          "pf": null,
+          "winrate": 0.0,
+          "dd_pts": 0.0
+        },
+        "0.7": {
+          "n_trades": 0,
+          "total_pts": 0.0,
+          "expectancy": 0.0,
+          "pf": null,
+          "winrate": 0.0,
+          "dd_pts": 0.0
+        }
+      },
+      "baseline_threshold0": {
+        "n_trades": 477070,
+        "total_pts": 564309503.5,
+        "expectancy": 1182.8652,
+        "pf": 239.2616,
+        "winrate": 0.0071,
+        "dd_pts": -3545.0
+      },
+      "baseline_aleatorio30": {
+        "n_trades": 0,
+        "expectancy_media": 0.0,
+        "total_pts_medio": 0.0,
+        "total_pts_min": 0.0,
+        "total_pts_max": 0.0,
+        "fracao_seeds_atras_do_modelo": 0.0
+      },
+      "baseline_momentum": {
+        "n_trades": 139330,
+        "total_pts": 150139505.0,
+        "expectancy": 1077.582,
+        "pf": 217.916,
+        "winrate": 0.0065,
+        "dd_pts": -5390.0
+      }
+    },
+    {
+      "fold": 4,
+      "treino_dias": [
+        "2026-08-04",
+        "2026-08-05",
+        "2026-08-06",
+        "2026-08-07",
+        "2026-08-10",
+        "2026-08-11"
+      ],
+      "teste_dia": "2026-08-12",
+      "n_treino": 2724090,
+      "n_teste": 469460,
+      "auc": 0.8418,
+      "n_sinais": {
+        "0.5": 0,
+        "0.6": 0,
+        "0.7": 0
+      },
+      "modelo_por_threshold": {
+        "0.5": {
+          "n_trades": 0,
+          "total_pts": 0.0,
+          "expectancy": 0.0,
+          "pf": null,
+          "winrate": 0.0,
+          "dd_pts": 0.0
+        },
+        "0.6": {
+          "n_trades": 0,
+          "total_pts": 0.0,
+          "expectancy": 0.0,
+          "pf": null,
+          "winrate": 0.0,
+          "dd_pts": 0.0
+        },
+        "0.7": {
+          "n_trades": 0,
+          "total_pts": 0.0,
+          "expectancy": 0.0,
+          "pf": null,
+          "winrate": 0.0,
+          "dd_pts": 0.0
+        }
+      },
+      "baseline_threshold0": {
+        "n_trades": 469460,
+        "total_pts": 561955933.5,
+        "expectancy": 1197.0262,
+        "pf": 242.1518,
+        "winrate": 0.0072,
+        "dd_pts": -1000.0
+      },
+      "baseline_aleatorio30": {
+        "n_trades": 0,
+        "expectancy_media": 0.0,
+        "total_pts_medio": 0.0,
+        "total_pts_min": 0.0,
+        "total_pts_max": 0.0,
+        "fracao_seeds_atras_do_modelo": 0.0
+      },
+      "baseline_momentum": {
+        "n_trades": 141690,
+        "total_pts": 192686277.5,
+        "expectancy": 1359.9144,
+        "pf": 275.2377,
+        "winrate": 0.0082,
+        "dd_pts": -3745.0
+      }
+    },
+    {
+      "fold": 5,
+      "treino_dias": [
+        "2026-08-04",
+        "2026-08-05",
+        "2026-08-06",
+        "2026-08-07",
+        "2026-08-10",
+        "2026-08-11",
+        "2026-08-12"
+      ],
+      "teste_dia": "2026-08-13",
+      "n_treino": 3194050,
+      "n_teste": 460290,
+      "auc": 0.8499,
+      "n_sinais": {
+        "0.5": 0,
+        "0.6": 0,
+        "0.7": 0
+      },
+      "modelo_por_threshold": {
+        "0.5": {
+          "n_trades": 0,
+          "total_pts": 0.0,
+          "expectancy": 0.0,
+          "pf": null,
+          "winrate": 0.0,
+          "dd_pts": 0.0
+        },
+        "0.6": {
+          "n_trades": 0,
+          "total_pts": 0.0,
+          "expectancy": 0.0,
+          "pf": null,
+          "winrate": 0.0,
+          "dd_pts": 0.0
+        },
+        "0.7": {
+          "n_trades": 0,
+          "total_pts": 0.0,
+          "expectancy": 0.0,
+          "pf": null,
+          "winrate": 0.0,
+          "dd_pts": 0.0
+        }
+      },
+      "baseline_threshold0": {
+        "n_trades": 460290,
+        "total_pts": 555044475.5,
+        "expectancy": 1205.8582,
+        "pf": 243.9531,
+        "winrate": 0.0073,
+        "dd_pts": -3745.0
+      },
+      "baseline_aleatorio30": {
+        "n_trades": 0,
+        "expectancy_media": 0.0,
+        "total_pts_medio": 0.0,
+        "total_pts_min": 0.0,
+        "total_pts_max": 0.0,
+        "fracao_seeds_atras_do_modelo": 0.0
+      },
+      "baseline_momentum": {
+        "n_trades": 134690,
+        "total_pts": 153897467.0,
+        "expectancy": 1142.605,
+        "pf": 231.1202,
+        "winrate": 0.0069,
+        "dd_pts": -6535.0
+      }
+    },
+    {
+      "fold": 6,
+      "treino_dias": [
+        "2026-08-04",
+        "2026-08-05",
+        "2026-08-06",
+        "2026-08-07",
+        "2026-08-10",
+        "2026-08-11",
+        "2026-08-12",
+        "2026-08-13"
+      ],
+      "teste_dia": "2026-08-14",
+      "n_treino": 3654640,
+      "n_teste": 478190,
+      "auc": 0.7035,
+      "n_sinais": {
+        "0.5": 0,
+        "0.6": 0,
+        "0.7": 0
+      },
+      "modelo_por_threshold": {
+        "0.5": {
+          "n_trades": 0,
+          "total_pts": 0.0,
+          "expectancy": 0.0,
+          "pf": null,
+          "winrate": 0.0,
+          "dd_pts": 0.0
+        },
+        "0.6": {
+          "n_trades": 0,
+          "total_pts": 0.0,
+          "expectancy": 0.0,
+          "pf": null,
+          "winrate": 0.0,
+          "dd_pts": 0.0
+        },
+        "0.7": {
+          "n_trades": 0,
+          "total_pts": 0.0,
+          "expectancy": 0.0,
+          "pf": null,
+          "winrate": 0.0,
+          "dd_pts": 0.0
+        }
+      },
+      "baseline_threshold0": {
+        "n_trades": 478190,
+        "total_pts": 551982319.5,
+        "expectancy": 1154.3159,
+        "pf": 233.5086,
+        "winrate": 0.0071,
+        "dd_pts": -1000.0
+      },
+      "baseline_aleatorio30": {
+        "n_trades": 0,
+        "expectancy_media": 0.0,
+        "total_pts_medio": 0.0,
+        "total_pts_min": 0.0,
+        "total_pts_max": 0.0,
+        "fracao_seeds_atras_do_modelo": 0.0
+      },
+      "baseline_momentum": {
+        "n_trades": 146980,
+        "total_pts": 148494192.5,
+        "expectancy": 1010.302,
+        "pf": 204.3206,
+        "winrate": 0.0062,
+        "dd_pts": -4830.0
+      }
+    },
+    {
+      "fold": 7,
+      "treino_dias": [
+        "2026-08-04",
+        "2026-08-05",
+        "2026-08-06",
+        "2026-08-07",
+        "2026-08-10",
+        "2026-08-11",
+        "2026-08-12",
+        "2026-08-13",
+        "2026-08-14"
+      ],
+      "teste_dia": "2026-08-17",
+      "n_treino": 4133340,
+      "n_teste": 650130,
+      "auc": 0.7443,
+      "n_sinais": {
+        "0.5": 0,
+        "0.6": 0,
+        "0.7": 0
+      },
+      "modelo_por_threshold": {
+        "0.5": {
+          "n_trades": 0,
+          "total_pts": 0.0,
+          "expectancy": 0.0,
+          "pf": null,
+          "winrate": 0.0,
+          "dd_pts": 0.0
+        },
+        "0.6": {
+          "n_trades": 0,
+          "total_pts": 0.0,
+          "expectancy": 0.0,
+          "pf": null,
+          "winrate": 0.0,
+          "dd_pts": 0.0
+        },
+        "0.7": {
+          "n_trades": 0,
+          "total_pts": 0.0,
+          "expectancy": 0.0,
+          "pf": null,
+          "winrate": 0.0,
+          "dd_pts": 0.0
+        }
+      },
+      "baseline_threshold0": {
+        "n_trades": 650130,
+        "total_pts": 558139934.5,
+        "expectancy": 858.5051,
+        "pf": 173.6061,
+        "winrate": 0.0052,
+        "dd_pts": -3495.0
+      },
+      "baseline_aleatorio30": {
+        "n_trades": 0,
+        "expectancy_media": 0.0,
+        "total_pts_medio": 0.0,
+        "total_pts_min": 0.0,
+        "total_pts_max": 0.0,
+        "fracao_seeds_atras_do_modelo": 0.0
+      },
+      "baseline_momentum": {
+        "n_trades": 119580,
+        "total_pts": 24281960.0,
+        "expectancy": 203.0604,
+        "pf": 41.6634,
+        "winrate": 0.0013,
+        "dd_pts": -29005.0
+      }
+    }
+  ]
+}

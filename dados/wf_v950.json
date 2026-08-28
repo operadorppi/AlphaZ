@@ -1,0 +1,50 @@
+{
+  "versao": "v950",
+  "n_features": 129,
+  "accuracy": 0.754190909445898,
+  "auc": 0.7789056803086624,
+  "baseline_acc": 0.9514916630871959,
+  "n_trades_thr06": 206075,
+  "top_features": [
+    [
+      "volume_acumulado_dia",
+      0.1307146643158375
+    ],
+    [
+      "vp_vp_total",
+      0.08292749059472516
+    ],
+    [
+      "minutos_ate_fechamento",
+      0.07649229359545615
+    ],
+    [
+      "segundos_desde_abertura",
+      0.07571830351191716
+    ],
+    [
+      "sin_horario",
+      0.07208134435730937
+    ],
+    [
+      "volume_relativo",
+      0.0587736306281599
+    ],
+    [
+      "cos_horario",
+      0.0558795928226105
+    ],
+    [
+      "dist_maxima_dia_norm",
+      0.04210321278044101
+    ],
+    [
+      "vwap_vs_poc",
+      0.026853546087318075
+    ],
+    [
+      "range_vol_bps",
+      0.022801069232115157
+    ]
+  ]
+}

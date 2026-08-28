@@ -1,0 +1,97 @@
+{
+  "modelo": "RandomForest",
+  "ativo": "WINV26",
+  "tp_pts": 100,
+  "sl_pts": 50,
+  "datas_treino": [
+    "20260807",
+    "20260811",
+    "20260810",
+    "20260812",
+    "20260804",
+    "20260805",
+    "20260806"
+  ],
+  "datas_teste": [
+    "20260813",
+    "20260814",
+    "20260817"
+  ],
+  "n_treino": 229910,
+  "n_teste": 100090,
+  "features": 26,
+  "resultado_global": {
+    "acuracia": 0.5773803576780897,
+    "auc": 0.6162383857141487,
+    "profit_factor": 2.732387706855792,
+    "expectancy": 36.60705365171346,
+    "n_sinais_pos": 58570,
+    "n_sinais_neg": 41520,
+    "n_labels_pos": 51290,
+    "n_labels_neg": 48800,
+    "drawdown_max": 38500
+  },
+  "resultados_por_dia": {
+    "20260813": {
+      "acuracia": 0.563109954456734,
+      "auc": 0.5997094335364477,
+      "profit_factor": 2.5778108711839165,
+      "expectancy": 34.466493168510084,
+      "n_sinais_pos": 16670,
+      "n_sinais_neg": 14070,
+      "n_labels_pos": 16880,
+      "n_labels_neg": 13860,
+      "drawdown_max": 15000
+    },
+    "20260814": {
+      "acuracia": 0.5595458146289939,
+      "auc": 0.6122855174222199,
+      "profit_factor": 2.5407673860911273,
+      "expectancy": 33.93187219434909,
+      "n_sinais_pos": 24370,
+      "n_sinais_neg": 13500,
+      "n_labels_pos": 19170,
+      "n_labels_neg": 18700,
+      "drawdown_max": 38500
+    },
+    "20260817": {
+      "acuracia": 0.6127700127064803,
+      "auc": 0.653559468859496,
+      "profit_factor": 3.1648892534864643,
+      "expectancy": 41.91550190597204,
+      "n_sinais_pos": 17530,
+      "n_sinais_neg": 13950,
+      "n_labels_pos": 15240,
+      "n_labels_neg": 16240,
+      "drawdown_max": 10000
+    }
+  },
+  "feature_importances": {
+    "delta_preco_janela": 0.1903586021817298,
+    "vp_vp_total": 0.10056438501326705,
+    "preco_ultimo": 0.07620582056421814,
+    "cvd_total": 0.06880453875438483,
+    "ewma_imb_longa": 0.06537860507916919,
+    "vp_vah_dist": 0.05840004170656795,
+    "vp_poc_dist": 0.05445510668791581,
+    "aggr_imb": 0.05286075486176929,
+    "ewma_imb_curta": 0.0523160471406059,
+    "vp_val_dist": 0.04634585294406841,
+    "vpin": 0.030114939226994514,
+    "range_vol_bps": 0.02924718656158412,
+    "vol_compra": 0.022425156702809187,
+    "vol_venda": 0.01999666562937302,
+    "n_eventos_janela": 0.018422272725144653,
+    "taxa_eventos": 0.01775153745141657,
+    "vol_total": 0.017424384113210206,
+    "entropy_venda": 0.012987134012101253,
+    "kyle_kyle_lambda": 0.012776970978003253,
+    "realized_vol_bps": 0.011890432783676491,
+    "entropy_compra": 0.011351797112152062,
+    "hhi_compra": 0.011100117592557884,
+    "hhi_venda": 0.010879259209963531,
+    "cvd_div": 0.005709065151341166,
+    "vp_poc_acima": 0.0022333258159757145,
+    "kyle_kyle_n": 0.0
+  }
+}

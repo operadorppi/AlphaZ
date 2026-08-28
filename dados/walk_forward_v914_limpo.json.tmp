@@ -1,0 +1,278 @@
+{
+  "folds": [
+    {
+      "teste_dia": "2026-08-07",
+      "n_teste": 456730,
+      "auc": 0.8559,
+      "modelo_por_threshold": {
+        "0.5": {
+          "n_trades": 0,
+          "total_pts": 0.0,
+          "expectancy": 0.0,
+          "pf": null,
+          "winrate": 0.0,
+          "dd_pts": 0.0
+        },
+        "0.6": {
+          "n_trades": 0,
+          "total_pts": 0.0,
+          "expectancy": 0.0,
+          "pf": null,
+          "winrate": 0.0,
+          "dd_pts": 0.0
+        },
+        "0.7": {
+          "n_trades": 0,
+          "total_pts": 0.0,
+          "expectancy": 0.0,
+          "pf": null,
+          "winrate": 0.0,
+          "dd_pts": 0.0
+        }
+      },
+      "baseline_momentum": {
+        "n_trades": 131010,
+        "total_pts": 147913242.0,
+        "expectancy": 1129.0225,
+        "pf": 228.3018,
+        "winrate": 0.0066,
+        "dd_pts": -4345.0
+      }
+    },
+    {
+      "teste_dia": "2026-08-10",
+      "n_teste": 435030,
+      "auc": 0.8642,
+      "modelo_por_threshold": {
+        "0.5": {
+          "n_trades": 0,
+          "total_pts": 0.0,
+          "expectancy": 0.0,
+          "pf": null,
+          "winrate": 0.0,
+          "dd_pts": 0.0
+        },
+        "0.6": {
+          "n_trades": 0,
+          "total_pts": 0.0,
+          "expectancy": 0.0,
+          "pf": null,
+          "winrate": 0.0,
+          "dd_pts": 0.0
+        },
+        "0.7": {
+          "n_trades": 0,
+          "total_pts": 0.0,
+          "expectancy": 0.0,
+          "pf": null,
+          "winrate": 0.0,
+          "dd_pts": 0.0
+        }
+      },
+      "baseline_momentum": {
+        "n_trades": 126790,
+        "total_pts": 160344158.15,
+        "expectancy": 1264.6436,
+        "pf": 255.8219,
+        "winrate": 0.0074,
+        "dd_pts": -5820.0
+      }
+    },
+    {
+      "teste_dia": "2026-08-11",
+      "n_teste": 477070,
+      "auc": 0.8263,
+      "modelo_por_threshold": {
+        "0.5": {
+          "n_trades": 0,
+          "total_pts": 0.0,
+          "expectancy": 0.0,
+          "pf": null,
+          "winrate": 0.0,
+          "dd_pts": 0.0
+        },
+        "0.6": {
+          "n_trades": 0,
+          "total_pts": 0.0,
+          "expectancy": 0.0,
+          "pf": null,
+          "winrate": 0.0,
+          "dd_pts": 0.0
+        },
+        "0.7": {
+          "n_trades": 0,
+          "total_pts": 0.0,
+          "expectancy": 0.0,
+          "pf": null,
+          "winrate": 0.0,
+          "dd_pts": 0.0
+        }
+      },
+      "baseline_momentum": {
+        "n_trades": 139330,
+        "total_pts": 150139505.0,
+        "expectancy": 1077.582,
+        "pf": 217.916,
+        "winrate": 0.0065,
+        "dd_pts": -5390.0
+      }
+    },
+    {
+      "teste_dia": "2026-08-12",
+      "n_teste": 469460,
+      "auc": 0.8406,
+      "modelo_por_threshold": {
+        "0.5": {
+          "n_trades": 0,
+          "total_pts": 0.0,
+          "expectancy": 0.0,
+          "pf": null,
+          "winrate": 0.0,
+          "dd_pts": 0.0
+        },
+        "0.6": {
+          "n_trades": 0,
+          "total_pts": 0.0,
+          "expectancy": 0.0,
+          "pf": null,
+          "winrate": 0.0,
+          "dd_pts": 0.0
+        },
+        "0.7": {
+          "n_trades": 0,
+          "total_pts": 0.0,
+          "expectancy": 0.0,
+          "pf": null,
+          "winrate": 0.0,
+          "dd_pts": 0.0
+        }
+      },
+      "baseline_momentum": {
+        "n_trades": 141690,
+        "total_pts": 192686277.5,
+        "expectancy": 1359.9144,
+        "pf": 275.2377,
+        "winrate": 0.0082,
+        "dd_pts": -3745.0
+      }
+    },
+    {
+      "teste_dia": "2026-08-13",
+      "n_teste": 460290,
+      "auc": 0.8435,
+      "modelo_por_threshold": {
+        "0.5": {
+          "n_trades": 0,
+          "total_pts": 0.0,
+          "expectancy": 0.0,
+          "pf": null,
+          "winrate": 0.0,
+          "dd_pts": 0.0
+        },
+        "0.6": {
+          "n_trades": 0,
+          "total_pts": 0.0,
+          "expectancy": 0.0,
+          "pf": null,
+          "winrate": 0.0,
+          "dd_pts": 0.0
+        },
+        "0.7": {
+          "n_trades": 0,
+          "total_pts": 0.0,
+          "expectancy": 0.0,
+          "pf": null,
+          "winrate": 0.0,
+          "dd_pts": 0.0
+        }
+      },
+      "baseline_momentum": {
+        "n_trades": 134690,
+        "total_pts": 153897467.0,
+        "expectancy": 1142.605,
+        "pf": 231.1202,
+        "winrate": 0.0069,
+        "dd_pts": -6535.0
+      }
+    },
+    {
+      "teste_dia": "2026-08-14",
+      "n_teste": 478190,
+      "auc": 0.8189,
+      "modelo_por_threshold": {
+        "0.5": {
+          "n_trades": 0,
+          "total_pts": 0.0,
+          "expectancy": 0.0,
+          "pf": null,
+          "winrate": 0.0,
+          "dd_pts": 0.0
+        },
+        "0.6": {
+          "n_trades": 0,
+          "total_pts": 0.0,
+          "expectancy": 0.0,
+          "pf": null,
+          "winrate": 0.0,
+          "dd_pts": 0.0
+        },
+        "0.7": {
+          "n_trades": 0,
+          "total_pts": 0.0,
+          "expectancy": 0.0,
+          "pf": null,
+          "winrate": 0.0,
+          "dd_pts": 0.0
+        }
+      },
+      "baseline_momentum": {
+        "n_trades": 146980,
+        "total_pts": 148494192.5,
+        "expectancy": 1010.302,
+        "pf": 204.3206,
+        "winrate": 0.0062,
+        "dd_pts": -4830.0
+      }
+    },
+    {
+      "teste_dia": "2026-08-17",
+      "n_teste": 650130,
+      "auc": 0.7446,
+      "modelo_por_threshold": {
+        "0.5": {
+          "n_trades": 0,
+          "total_pts": 0.0,
+          "expectancy": 0.0,
+          "pf": null,
+          "winrate": 0.0,
+          "dd_pts": 0.0
+        },
+        "0.6": {
+          "n_trades": 0,
+          "total_pts": 0.0,
+          "expectancy": 0.0,
+          "pf": null,
+          "winrate": 0.0,
+          "dd_pts": 0.0
+        },
+        "0.7": {
+          "n_trades": 0,
+          "total_pts": 0.0,
+          "expectancy": 0.0,
+          "pf": null,
+          "winrate": 0.0,
+          "dd_pts": 0.0
+        }
+      },
+      "baseline_momentum": {
+        "n_trades": 119580,
+        "total_pts": 24281960.0,
+        "expectancy": 203.0604,
+        "pf": 41.6634,
+        "winrate": 0.0013,
+        "dd_pts": -29005.0
+      }
+    }
+  ],
+  "features": 26
+}

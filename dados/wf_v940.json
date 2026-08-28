@@ -1,0 +1,42 @@
+{
+  "v": "v940",
+  "n_feat": 105,
+  "acc": 0.665,
+  "acc_std": 0.007,
+  "top10": [
+    "segundos_desde_abertura",
+    "volume_acumulado_dia",
+    "cos_horario",
+    "minutos_ate_fechamento",
+    "vp_vp_total",
+    "sin_horario",
+    "delta_preco_janela",
+    "dist_maxima_dia_norm",
+    "range_vol_bps",
+    "n_eventos_janela"
+  ],
+  "comparacao": {
+    "v939": {
+      "feat": 26,
+      "acc": 0.627
+    },
+    "v940": {
+      "feat": 105,
+      "acc": 0.665
+    }
+  },
+  "folds": [
+    {
+      "dia": "2026-08-13",
+      "acc": 0.674
+    },
+    {
+      "dia": "2026-08-14",
+      "acc": 0.656
+    },
+    {
+      "dia": "2026-08-17",
+      "acc": 0.665
+    }
+  ]
+}

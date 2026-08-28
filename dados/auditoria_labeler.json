@@ -1,0 +1,172 @@
+{
+  "distribuicao_labels": {
+    "-1": {
+      "20260804": 19280,
+      "20260805": 18260,
+      "20260806": 19380,
+      "20260807": 15640,
+      "20260810": 12850,
+      "20260811": 13650,
+      "20260812": 22220,
+      "20260813": 13860,
+      "20260814": 18700,
+      "20260817": 16240
+    },
+    "0": {
+      "20260804": 305580,
+      "20260805": 305720,
+      "20260806": 305210,
+      "20260807": 316900,
+      "20260810": 317680,
+      "20260811": 318290,
+      "20260812": 296960,
+      "20260813": 311670,
+      "20260814": 304470,
+      "20260817": 310850
+    },
+    "1": {
+      "20260804": 17430,
+      "20260805": 18270,
+      "20260806": 17830,
+      "20260807": 9740,
+      "20260810": 11750,
+      "20260811": 10400,
+      "20260812": 23210,
+      "20260813": 16880,
+      "20260814": 19170,
+      "20260817": 15240
+    }
+  },
+  "verificacao_leakage": [
+    {
+      "feature": "n_eventos_janela",
+      "status": "OK",
+      "motivo": "Calculada em t, label em t+30s"
+    },
+    {
+      "feature": "vol_compra",
+      "status": "OK",
+      "motivo": "Calculada em t, label em t+30s"
+    },
+    {
+      "feature": "vol_venda",
+      "status": "OK",
+      "motivo": "Calculada em t, label em t+30s"
+    },
+    {
+      "feature": "vol_total",
+      "status": "OK",
+      "motivo": "Calculada em t, label em t+30s"
+    },
+    {
+      "feature": "aggr_imb",
+      "status": "OK",
+      "motivo": "Calculada em t, label em t+30s"
+    },
+    {
+      "feature": "ewma_imb_curta",
+      "status": "OK",
+      "motivo": "Calculada em t, label em t+30s"
+    },
+    {
+      "feature": "ewma_imb_longa",
+      "status": "OK",
+      "motivo": "Calculada em t, label em t+30s"
+    },
+    {
+      "feature": "hhi_compra",
+      "status": "OK",
+      "motivo": "Calculada em t, label em t+30s"
+    },
+    {
+      "feature": "hhi_venda",
+      "status": "OK",
+      "motivo": "Calculada em t, label em t+30s"
+    },
+    {
+      "feature": "entropy_compra",
+      "status": "OK",
+      "motivo": "Calculada em t, label em t+30s"
+    },
+    {
+      "feature": "entropy_venda",
+      "status": "OK",
+      "motivo": "Calculada em t, label em t+30s"
+    },
+    {
+      "feature": "vpin",
+      "status": "OK",
+      "motivo": "Calculada em t, label em t+30s"
+    },
+    {
+      "feature": "preco_ultimo",
+      "status": "OK",
+      "motivo": "Calculada em t, label em t+30s"
+    },
+    {
+      "feature": "delta_preco_janela",
+      "status": "OK",
+      "motivo": "Calculada em t, label em t+30s"
+    },
+    {
+      "feature": "cvd_total",
+      "status": "OK",
+      "motivo": "Calculada em t, label em t+30s"
+    },
+    {
+      "feature": "cvd_div",
+      "status": "OK",
+      "motivo": "Calculada em t, label em t+30s"
+    },
+    {
+      "feature": "realized_vol_bps",
+      "status": "OK",
+      "motivo": "Calculada em t, label em t+30s"
+    },
+    {
+      "feature": "range_vol_bps",
+      "status": "OK",
+      "motivo": "Calculada em t, label em t+30s"
+    },
+    {
+      "feature": "taxa_eventos",
+      "status": "OK",
+      "motivo": "Calculada em t, label em t+30s"
+    },
+    {
+      "feature": "vp_poc_dist",
+      "status": "OK",
+      "motivo": "Calculada em t, label em t+30s"
+    },
+    {
+      "feature": "vp_vah_dist",
+      "status": "OK",
+      "motivo": "Calculada em t, label em t+30s"
+    },
+    {
+      "feature": "vp_val_dist",
+      "status": "OK",
+      "motivo": "Calculada em t, label em t+30s"
+    },
+    {
+      "feature": "vp_poc_acima",
+      "status": "OK",
+      "motivo": "Calculada em t, label em t+30s"
+    },
+    {
+      "feature": "vp_vp_total",
+      "status": "OK",
+      "motivo": "Calculada em t, label em t+30s"
+    },
+    {
+      "feature": "kyle_kyle_lambda",
+      "status": "OK",
+      "motivo": "Calculada em t, label em t+30s"
+    },
+    {
+      "feature": "kyle_kyle_n",
+      "status": "OK",
+      "motivo": "Calculada em t, label em t+30s"
+    }
+  ]
+}

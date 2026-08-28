@@ -1,0 +1,20 @@
+{
+  "total_features": 26,
+  "leakage_suspeito": [
+    {
+      "feature": "delta_preco_janela",
+      "correlacao": -0.15310979098250158,
+      "motivo": "alta correlação com label futuro"
+    }
+  ],
+  "derivadas": {
+    "delta_preco_janela": [
+      "preco_ultimo",
+      "preco_inicio_janela"
+    ],
+    "microprice_vs_mid": [
+      "microprice",
+      "mid"
+    ]
+  }
+}

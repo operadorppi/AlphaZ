@@ -1,0 +1,68 @@
+{
+    "base_dir": "D:\\MarketData\\Profit",
+    "save_dir": "D:\\MarketData\\mimo",
+    "ml_modelo": "D:\\MarketData\\mimo\\modelo_lgbm_v4_limpo.pkl",
+    "ml_threshold": 0.6,
+    "web": {
+        "host": "127.0.0.1",
+        "port": 5001
+    },
+    "ativos": [
+        "WINV26",
+        "WDOU26"
+    ],
+    "rtd": {
+        "book_linhas": 500,
+        "tt_linhas": 500,
+        "poll_s": 0.02,
+        "max_janelas": 12
+    },
+    "trading": {
+        "tp_pts": 100,
+        "sl_pts": 50,
+        "max_holding_s": 0,
+        "max_trades_dia": 15,
+        "max_drawdown_dia": -300,
+        "custo_execucao": {
+            "WIN": 5.0,
+            "WDO": 1.0
+        }
+    },
+    "circuit_breaker": {
+        "nivel1_perdas": 3,
+        "nivel1_pnl": -100,
+        "nivel2_perdas": 5,
+        "nivel2_pnl": -300,
+        "nivel3_perdas": 7,
+        "nivel3_pnl": -500
+    },
+    "desligar_horarios_ruins": false,
+    "normalizar_score": false,
+    "horarios": {
+        "abertura_fim": [
+            10,
+            0
+        ],
+        "almoco_inicio": [
+            12,
+            0
+        ],
+        "almoco_fim": [
+            13,
+            30
+        ],
+        "fechamento": [
+            16,
+            30
+        ]
+    },
+    "aprendizado": {
+        "delta": 0.02,
+        "decay": 0.998,
+        "min_amostras": 5
+    },
+    "position_sizing": {
+        "target_risk_per_trade": 60,
+        "max_position_size": 10
+    }
+}

@@ -1,0 +1,40 @@
+dias: ['2026-08-04', '2026-08-05', '2026-08-06', '2026-08-07', '2026-08-10', '2026-08-11', '2026-08-12', '2026-08-13', '2026-08-14', '2026-08-17']
+vol>=5 filter: 6846660 -> 4783770 linhas (69.9%)
+linhas: 4783770 | features: 26
+modelo: LightGBM
+fold 1 2026-08-07 auc 0.7126 modelo 0.6: 20980 trades, -16.6282 pts/trade
+fold 2 2026-08-10 auc 0.6284 modelo 0.6: 93260 trades, -11.0375 pts/trade
+fold 3 2026-08-11 auc 0.766 modelo 0.6: 1090 trades, 7.3761 pts/trade
+fold 4 2026-08-12 auc 0.6351 modelo 0.6: 5110 trades, 11.1644 pts/trade
+fold 5 2026-08-13 auc 0.7125 modelo 0.6: 10720 trades, -4.6362 pts/trade
+fold 6 2026-08-14 auc 0.6831 modelo 0.6: 10890 trades, -4.9311 pts/trade
+fold 7 2026-08-17 auc 0.6471 modelo 0.6: 580 trades, 42.5 pts/trade
+salvo: walk_forward_v914_limpo.json | segundos: 1924.4
+ronto, pulando
+fold 1 2026-08-12 auc 0.6351 modelo 0.6: 5110 trades, 11.1644 pts/trade
+fold 2 2026-08-13 auc 0.7125 modelo 0.6: 10720 trades, -4.6362 pts/trade
+dias: ['2026-08-04', '2026-08-05', '2026-08-06', '2026-08-07', '2026-08-10', '2026-08-11', '2026-08-12', '2026-08-13', '2026-08-14', '2026-08-17']
+vol>=5 filter: 6846660 -> 4783770 linhas (69.9%)
+linhas: 4783770 | features: 26
+modelo: LightGBM
+fold 1 2026-08-07 ja pronto, pulando
+fold 2 2026-08-10 ja pronto, pulando
+fold 3 2026-08-11 ja pronto, pulando
+fold 4 2026-08-12 ja pronto, pulando
+fold 5 2026-08-13 ja pronto, pulando
+fold 6 2026-08-14 ja pronto, pulando
+fold 3 2026-08-14 auc 0.6831 modelo 0.6: 10890 trades, -4.9311 pts/trade
+dias: ['2026-08-04', '2026-08-05', '2026-08-06', '2026-08-07', '2026-08-10', '2026-08-11', '2026-08-12', '2026-08-13', '2026-08-14', '2026-08-17']
+vol>=5 filter: 6846660 -> 4783770 linhas (69.9%)
+linhas: 4783770 | features: 26
+modelo: LightGBM
+fold 1 2026-08-07 ja pronto, pulando
+fold 2 2026-08-10 ja pronto, pulando
+fold 3 2026-08-11 ja pronto, pulando
+fold 4 2026-08-12 ja pronto, pulando
+fold 5 2026-08-13 ja pronto, pulando
+fold 6 2026-08-14 ja pronto, pulando
+fold 7 2026-08-17 ja pronto, pulando
+salvo: walk_forward_v914_limpo.json | segundos: 28.6
+fold 7 2026-08-17 auc 0.6471 modelo 0.6: 580 trades, 42.5 pts/trade
+salvo: walk_forward_v914_limpo.json | segundos: 733.2
