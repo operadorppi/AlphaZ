@@ -40,3 +40,29 @@ git config --global user.name "operadorppi"
 git config --global user.email "daytradenofluxo.com"
 git config --global user.name "operadorppi"
 git config --global user.email "daytradenofluxo.com"
+# Inicializa o git na pasta do projeto
+git init
+# Adiciona o endereço do seu GitHub
+git remote add origin https://github.com/operadorppi/alphaz.git
+# Define o nome da ramificação principal como 'main'
+git branch -M main
+# Prepara todos os arquivos (respeitando o .gitignore)
+git add .
+# Cria o primeiro "pacote" de alterações
+git commit -m "Primeiro envio: Motor AlphaZ v10"
+# Envia para o GitHub (vai pedir seu usuário e o Token/Senha)
+git push -u origin main
+ssh-keygen -t ed25519 -C "daytradenofluxo@gmail.com"
+cat ~/.ssh/id_ed25519.pub
+ssh -T git@github.com
+git config --global user.email "daytradenofluxo@gmail.com"
+git config --global user.name "operadorppi"
+cd /home/daytradenofluxo/
+# Inicializa o repositório local
+git init
+# Cria a branch principal
+git branch -M main
+# Adiciona o repositório remoto (AlphaZ)
+# Nota: Se já existir, use 'git remote remove origin' antes
+git remote add origin git@github.com:operadorppi/AlphaZ.git
+git remote set-url origin git@github.com:operadorppi/AlphaZ.git

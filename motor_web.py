@@ -558,9 +558,11 @@ def parse_refresh_data(data):
 
 def fnum(v, d=0.0):
     try:
-        if v is None:
+        if v is None or v == "":
             return d
-        s = str(v).strip()
+        if isinstance(v, (int, float)):
+            return float(v)
+        s = str(v)
         if not s:
             return d
         x = float(s.replace(",", "."))
@@ -1050,6 +1052,7 @@ def _thread_com_ciclo(filas_book, filas_tt, ativos, base_pasta, shutdown_event, 
             "book_ultimo_snap": [None] * n_ativos,
             "book_ultimo_t": [0.0] * n_ativos,
             "vistos_tt": [{} for _ in range(n_ativos)],
+            "tt_assinaturas_cache": [[None] * LINHAS_TT for _ in range(n_ativos)],
         }
 
     dia_replay = estado["dia_replay"]
@@ -1063,6 +1066,7 @@ def _thread_com_ciclo(filas_book, filas_tt, ativos, base_pasta, shutdown_event, 
     book_ultimo_snap = estado["book_ultimo_snap"]
     book_ultimo_t = estado["book_ultimo_t"]
     vistos_tt = estado["vistos_tt"]
+    tt_sig_cache = estado["tt_assinaturas_cache"]
 
     dia_forcado = getattr(_thread_com_ciclo, "dia_replay_forcado", None)
     if dia_forcado:
@@ -1308,22 +1312,31 @@ def _thread_com_ciclo_wd(mon, srv, IRTDUpdateEvent, notify, disc, cb,
 
             ciclo_contador_tt[a_idx] += 1
 
-            # 1. Conta a frequencia de cada assinatura no retrato ATUAL da tabela
+            # 1. Atualiza apenas as assinaturas que mudaram e conta a frequência
             current_counts = {}
             example_r = {}
-            for r in tt_cur[a_idx]:
-                # v10.4: Acesso direto via get() sem overhead de conversão se o valor não mudar
-                pre_raw = r.get("PRE")
-                if not pre_raw or pre_raw == 0:
+            
+            for idx in tt_sujas[a_idx]:
+                r = tt_cur[a_idx][idx]
+                pre = r.get("PRE")
+                if pre and pre != 0:
+                    tt_sig_cache[a_idx][idx] = (
+                        r.get("DAT"), r.get("ACP"), pre,
+                        r.get("QUL"), r.get("AVD"),
+                        r.get("AGR"), r.get("AGAG")
+                    )
+                else:
+                    tt_sig_cache[a_idx][idx] = None
+
+            for sig in tt_sig_cache[a_idx]:
+                if sig is None:
                     continue
-                
-                # Assinatura otimizada: evita chamadas de sstr() se já forem strings
-                sig = (r.get("DAT"), r.get("ACP"), pre_raw,
-                       r.get("QUL"), r.get("AVD"),
-                       r.get("AGR"), r.get("AGAG"))
-                
                 current_counts[sig] = current_counts.get(sig, 0) + 1
-                example_r[sig] = r
+                if sig not in example_r:
+                    # Precisamos de um exemplo para extrair os dados depois
+                    # Buscamos no tt_cur usando o índice original se necessário, 
+                    # ou guardamos a ref aqui.
+                    example_r[sig] = sig # Otimização: a própria sig tem os dados brutos
 
             # Primeiro retrato pos-warmup: absorve a FIFO atual como baseline.
             # Isso evita fabricar 1000 negocios antigos como se fossem novos.
