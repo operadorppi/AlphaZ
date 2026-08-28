@@ -65,3 +65,9 @@ test_report.json
 # Temp
 *.tmp
 *.temp
+
+# Dados grandes (não subir)
+dados/
+*.zip
+*.db
+.freebuff/
