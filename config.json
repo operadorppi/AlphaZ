@@ -1,7 +1,7 @@
 {
     "base_dir": "D:\\MarketData\\Profit",
     "save_dir": "D:\\MarketData\\mimo",
-    "ml_modelo": "D:\\MarketData\\mimo\\26\\modelo_lgbm_v4_limpo.pkl",
+    "ml_modelo": "D:\\MarketData\\mimo\\26\\modelo_lgbm_v5_otimizado.pkl",
     "ml_threshold": 0.6,
     "web": {
         "host": "127.0.0.1",
