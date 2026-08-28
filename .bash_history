@@ -79,3 +79,4 @@ ssh -T git@github.com
 ps aux | grep auto_sync.sh
 chmod +x /home/daytradenofluxo/scripts/auto_sync.sh
 nohup /home/daytradenofluxo/scripts/auto_sync.sh &
+tail -f nohup.out
