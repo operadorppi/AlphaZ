@@ -39,8 +39,9 @@ OUT = 'walk_forward_v914_limpo.json'
 PURGE_S = 30
 EMBARGO_S = 30
 SEED = 42
-THRESHOLDS = [0.5, 0.6, 0.7]
-THRESH_PRINCIPAL = 0.6
+CUSTO_PTS = 5.0  # Custo de execução (WIN=5pts, WDO=1pt)
+THRESHOLDS = [0.3, 0.4, 0.5, 0.6]
+THRESH_PRINCIPAL = 0.4
 MIN_TREINO_DIAS = 3
 
 PROIBIDAS = ['label', 'saida', 'retorno', 'duracao', 'atingido', 'ts_ms',
@@ -48,6 +49,20 @@ PROIBIDAS = ['label', 'saida', 'retorno', 'duracao', 'atingido', 'ts_ms',
              'preco_saida', 'tp_atingido', 'sl_atingido', 'fase_sessao',
              'dias_ate_venc', 'duracao_label_ms']
 
+
+def _label_ternario(retorno_pts, custo=CUSTO_PTS):
+    """Converte retorno em label ternário com custo.
+    
+    +1: ganha mais que o custo (trade lucrativo)
+    -1: perde mais que o custo (trade prejudicial)
+     0: dentro da banda de custo (neutro — não deveria operar)
+    """
+    if retorno_pts > custo:
+        return 1
+    elif retorno_pts < -custo:
+        return -1
+    else:
+        return 0
 
 def _ece(y_true, y_prob, n_bins=10):
     """Expected Calibration Error: mede quão calibrada é a probabilidade."""
@@ -149,9 +164,25 @@ def run():
     Xfull = Xfull.dropna(axis=1, how='all')
     Xcols = list(Xfull.columns)
     Xarr = Xfull.to_numpy()
-    y = (df['label'].to_numpy() == 1).astype(np.int8)
+    
+    # v11.5: Target ternário com custo
+    # Antes: y = (label == 1) → 0.7% positivos, modelo nunca aprende
+    # Agora: y = {+1: lucro>custo, -1: perda>custo, 0: neutro}
+    ret_arr = df['retorno_pts'].to_numpy() if 'retorno_pts' in df.columns else np.zeros(len(df))
+    y_raw = np.array([_label_ternario(r, CUSTO_PTS) for r in ret_arr], dtype=np.int8)
+    
+    # Para LightGBM binário: separar em 3 modelos 1-vs-rest
+    # Modelo 1: predict se vai LUCRAR (y_raw == 1)
+    # Modelo 2: predict se vai PERDER (y_raw == -1)
+    y_lucro = (y_raw == 1).astype(np.int8)  # positivo: lucro > custo
+    y_perda = (y_raw == -1).astype(np.int8)  # positivo: perda > custo
+    
     print('linhas:', len(df), '| features:', len(Xcols), flush=True)
-
+    print(f'target ternário (custo={CUSTO_PTS}pts):')
+    print(f'  +1 (lucro>{CUSTO_PTS}):  {y_lucro.sum():,} ({100*y_lucro.mean():.2f}%)')
+    print(f'  -1 (perda>{CUSTO_PTS}):  {y_perda.sum():,} ({100*y_perda.mean():.2f}%)')
+    print(f'   0 (neutro):           {(y_raw==0).sum():,} ({100*(y_raw==0).mean():.2f}%)')
+    
     try:
         from lightgbm import LGBMClassifier
         MODELO = 'LightGBM'
@@ -183,42 +214,77 @@ def run():
         tr_mask = (dias_idx < test_day) & (ts <= b_ts - PURGE_S * 1000)
         te_mask = (dias_idx == test_day) & (ts >= b_ts + EMBARGO_S * 1000)
 
-        clf = LGBMClassifier(n_estimators=400, learning_rate=0.05,
-                             num_leaves=63, min_child_samples=50,
-                             subsample=0.8, colsample_bytree=0.8,
-                             n_jobs=2, random_state=SEED, verbose=-1)
-
+        # v11.5: Treinar 2 modelos binários (1-vs-rest)
+        # Modelo LUCRO: vai ganhar > custo?
+        # Modelo PERDA: vai perder > custo?
         import lightgbm as lgb
         _tr_idx = np.where(tr_mask)[0]
         _split = int(len(_tr_idx) * 0.8)
         _tr_final = _tr_idx[:_split]
         _val_idx = _tr_idx[_split:]
-        clf.fit(Xarr[_tr_final], y[_tr_final],
-                eval_set=[(Xarr[_val_idx], y[_val_idx])],
-                callbacks=[lgb.early_stopping(50, verbose=False),
-                           lgb.log_evaluation(0)])
-
-        prob = clf.predict_proba(Xarr[te_mask])[:, 1]
-        y_te = y[te_mask]
+        
+        # Modelo LUCRO
+        clf_lucro = LGBMClassifier(n_estimators=400, learning_rate=0.05,
+                                   num_leaves=63, min_child_samples=50,
+                                   subsample=0.8, colsample_bytree=0.8,
+                                   n_jobs=2, random_state=SEED, verbose=-1)
+        clf_lucro.fit(Xarr[_tr_final], y_lucro[_tr_final],
+                      eval_set=[(Xarr[_val_idx], y_lucro[_val_idx])],
+                      callbacks=[lgb.early_stopping(50, verbose=False),
+                                 lgb.log_evaluation(0)])
+        
+        # Modelo PERDA
+        clf_perda = LGBMClassifier(n_estimators=400, learning_rate=0.05,
+                                   num_leaves=63, min_child_samples=50,
+                                   subsample=0.8, colsample_bytree=0.8,
+                                   n_jobs=2, random_state=SEED, verbose=-1)
+        clf_perda.fit(Xarr[_tr_final], y_perda[_tr_final],
+                      eval_set=[(Xarr[_val_idx], y_perda[_val_idx])],
+                      callbacks=[lgb.early_stopping(50, verbose=False),
+                                 lgb.log_evaluation(0)])
+        
+        # Predições
+        prob_lucro = clf_lucro.predict_proba(Xarr[te_mask])[:, 1]
+        prob_perda = clf_perda.predict_proba(Xarr[te_mask])[:, 1]
+        
+        # Score combinado: lucro - perda (maior = melhor oportunidade)
+        prob = prob_lucro - prob_perda  # range: [-1, +1]
+        # Normalizar para [0, 1] para métricas
+        prob_norm = (prob - prob.min()) / (prob.max() - prob.min() + 1e-8)
+        
+        y_te_lucro = y_lucro[te_mask]
+        y_te_perda = y_perda[te_mask]
+        y_te = y_raw[te_mask]  # -1, 0, +1
         n_te = int(te_mask.sum())
-        n_unicos = len(np.unique(y_te))
-
-        # === Métricas de qualidade (sem simulação P&L) ===
-
-        # AUC (discriminação)
-        auc = round(float(roc_auc_score(y_te, prob)), 4) if n_unicos > 1 else None
-
-        # Brier Score (calibração — menor = melhor)
-        brier = _brier(y_te, prob)
-
-        # ECE ( Expected Calibration Error — menor = melhor)
-        ece = _ece(y_te, prob)
-
-        # Métricas por threshold
+        
+        # === Métricas de qualidade ===
+        
+        # AUC para cada modelo
+        auc_lucro = round(float(roc_auc_score(y_te_lucro, prob_lucro)), 4) if len(np.unique(y_te_lucro)) > 1 else None
+        auc_perda = round(float(roc_auc_score(y_te_perda, prob_perda)), 4) if len(np.unique(y_te_perda)) > 1 else None
+        
+        # Métricas por threshold (usando score combinado)
         metrics_por_thr = {}
         for thr in THRESHOLDS:
-            metrics_por_thr[str(thr)] = metricas_classificacao(y_te, prob, thr)
-
+            # Trade: lucro previsto > threshold E perda prevista < 0.3
+            sel = (prob_norm >= thr) & (prob_perda < 0.3)
+            n_trades = int(sel.sum())
+            if n_trades == 0:
+                metrics_por_thr[str(thr)] = {'n_trades': 0, 'accuracy': None, 'precision': None, 'recall': None}
+                continue
+            # Accuracy: dos selecionados, quantos realmente lucraram?
+            acc = round(float(y_te_lucro[sel].mean()), 4)
+            # Precision: dos selecionados, quantos não foram perda?
+            non_perda = (y_te[sel] != -1).mean()
+            prec = round(float(non_perda), 4)
+            metrics_por_thr[str(thr)] = {
+                'n_trades': n_trades,
+                'accuracy_lucro': acc,
+                'precision_neutra': prec,
+                'prevalence_lucro': round(float(y_te_lucro.mean()), 4),
+                'prevalence_perda': round(float(y_te_perda.mean()), 4),
+            }
+        
         m_princ = metrics_por_thr[str(THRESH_PRINCIPAL)]
 
         # Feature importance (top 10)
@@ -246,10 +312,10 @@ def run():
             'teste_dia': data_dia[test_day],
             'n_treino': int(tr_mask.sum()),
             'n_teste': n_te,
-            'prevalence': round(float(y_te.mean()), 4),
-            'auc': auc,
-            'brier': brier,
-            'ece': ece,
+            'prevalence_lucro': round(float(y_te_lucro.mean()), 4),
+            'prevalence_perda': round(float(y_te_perda.mean()), 4),
+            'auc_lucro': auc_lucro,
+            'auc_perda': auc_perda,
             'metrics_por_threshold': metrics_por_thr,
             'threshold_principal': m_princ,
             'prob_distribuicao': prob_stats,
@@ -270,21 +336,24 @@ def run():
     eces = [f['ece'] for f in folds if f.get('ece') is not None]
     briers = [f['brier'] for f in folds if f.get('brier') is not None]
 
+    # Resumo global
+    aucs_l = [f['auc_lucro'] for f in folds if f.get('auc_lucro') is not None]
+    aucs_p = [f['auc_perda'] for f in folds if f.get('auc_perda') is not None]
+
     res = {
-        'descricao': 'Walk-forward v11.4: metricas de QUALIDADE (sem P&L simulado)',
-        'versao': 'v11.4',
+        'descricao': 'Walk-forward v11.5: target ternario com custo',
+        'versao': 'v11.5',
         'dataset': _path,
         'modelo': MODELO,
         'features': len(Xcols),
+        'custo_pts': CUSTO_PTS,
         'purge_s': PURGE_S,
         'embargo_s': EMBARGO_S,
-        'target': 'binario TP-vs-nao-TP',
+        'target': 'ternario (lucro/perda/neutro) com custo',
         'resumo_global': {
             'n_folds': len(folds),
-            'auc_media': round(float(np.mean(aucs)), 4) if aucs else None,
-            'auc_std': round(float(np.std(aucs)), 4) if aucs else None,
-            'ece_media': round(float(np.mean(eces)), 4) if eces else None,
-            'brier_media': round(float(np.mean(briers)), 4) if briers else None,
+            'auc_lucro_media': round(float(np.mean(aucs_l)), 4) if aucs_l else None,
+            'auc_perda_media': round(float(np.mean(aucs_p)), 4) if aucs_p else None,
         },
         'folds': folds,
     }
@@ -292,9 +361,8 @@ def run():
     with io.open(OUT, 'w', encoding='utf-8') as f:
         json.dump(res, f, ensure_ascii=False, indent=2)
     print(f'\nsalvo: {OUT} | segundos: {round(time.time() - t0, 1)}')
-    print(f'Resumo: AUC={res["resumo_global"]["auc_media"]} '
-          f'ECE={res["resumo_global"]["ece_media"]} '
-          f'Brier={res["resumo_global"]["brier_media"]}')
+    print(f'Resumo: AUC_lucro={res["resumo_global"]["auc_lucro_media"]} '
+          f'AUC_perda={res["resumo_global"]["auc_perda_media"]}')
 
 
 if __name__ == '__main__':
