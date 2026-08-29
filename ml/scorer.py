@@ -19,6 +19,7 @@ Atribuições:
   - Diagnóstico de saúde do motor ML.
 """
 import logging
+import os
 import pickle
 import time
 import numpy as np
@@ -34,6 +35,7 @@ from features.volume_profile import VolumeProfileTracker
 from features.poc_migration import PocMigrationTracker
 from features.volume_relativo import VolumeRelativoTracker
 from features.cross_asset import CrossAssetEngine
+from ml.feature_manifest import FeatureManifest
 
 log = logging.getLogger('scorer')
 
@@ -67,6 +69,18 @@ class ScorerML:
         # v10.4: Extração de importância para auditoria de L500
         imp_series = feature_importances(self.modelo, self.features, top_n=50, importance_type='gain')
         self.importancias = imp_series.to_dict()
+        
+        # v11.11: Feature Manifest — paridade treino ↔ produção
+        self.manifest = None
+        manifest_path = os.path.join(os.path.dirname(caminho_modelo), 'feature_manifest.json')
+        if os.path.exists(manifest_path):
+            try:
+                self.manifest = FeatureManifest.load(manifest_path)
+                log.info(f'[MANIFEST] Carregado: {self.manifest.n_features} features required')
+            except Exception as e:
+                log.warning(f'[MANIFEST] Falha ao carregar: {e}')
+        else:
+            log.warning(f'[MANIFEST] Não encontrado: {manifest_path} — usando lista do .pkl')
         
         self.ultimo_snap = {}
         self.prob = {}
@@ -281,9 +295,19 @@ class ScorerML:
                     row['acima_ajuste_oficial'] = float(preco > adj)
                     row['abaixo_ajuste_oficial'] = float(preco < adj)
 
-        # v10.4: Otimização para Python 3.13 - lookup direto no mapeamento
-        # Pre-conversão para float32 se o modelo for LightGBM/XGBoost economiza memória
-        vals = [float(row.get(c, 0.0)) for c in self.features]
+        # v11.11: Extração via FeatureManifest (fail-safe)
+        if self.manifest:
+            ok, missing, extra = self.manifest.validate(row)
+            if not ok:
+                self.fallos += 1
+                self.ultimo_fallo_ts = time.time()
+                self.ultimo_error = f'MISSING_FEATURES: {missing}'
+                log.error('[MANIFEST] Features faltando: %s (fallos=%d)', missing, self.fallos)
+                return 0.5  # fail-safe: neutro
+            vals = self.manifest.extract(row)
+        else:
+            # Fallback: usa lista do .pkl (sem validação)
+            vals = [float(row.get(c, 0.0)) for c in self.features]
 
         try:
             import warnings as _w
