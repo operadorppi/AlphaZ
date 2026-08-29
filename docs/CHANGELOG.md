@@ -1,3 +1,29 @@
+## v11.4 — Walk-forward: Métricas de Qualidade (29/08/2026)
+
+### Problema
+
+Walk-forward anterior tratava cada segundo como trade independente (456K trades/dia), gerando PF=256 e expectancy=+1266 — fisicamente impossível.
+
+### Solução
+
+Reescrito `walk_forward_v914_limpo.py` para focar em métricas de classificação:
+
+| Métrica | Descrição |
+|---------|-----------|
+| AUC | Discriminação (separa TP de não-TP?) |
+| ECE | Expected Calibration Error (probabilidades calibradas?) |
+| Brier Score | Qualidade da calibração (menor = melhor) |
+| Accuracy | Acurácia geral por threshold |
+| Precision | Dos preditos positivos, quantos são TP? |
+| Recall | Dos TP reais, quantos foram detectados? |
+| F1 | Média harmônica precision×recall |
+
+**Removido:** `metricas()` de P&L, `baseline_threshold0`, `baseline_momentum`, `baseline_aleatorio30`.
+
+**P&L simulado** deve ser feito em `replay_engine.py` ou `simular_pnl.py` (1 trade por vez, TP/SL, reentrada após saída).
+
+---
+
 ## v11.3 — Fix Cross-Asset Contamination no Labeler (29/08/2026)
 
 ### BUG CRÍTICO: retorno_pts contaminado entre ativos
