@@ -117,7 +117,7 @@ def run_tune():
             auc = None
 
         cm = confusion_matrix(y_test, y_pred, labels=[0, 1])
-        ganhos = (cm[1, 1] + cm[0, 0]) * 100
+        ganhos = cm[1, 1] * 100  # v11.6: TN nao e lucro
         perdas = (cm[1, 0] + cm[0, 1]) * 50
         pf = ganhos / perdas if perdas > 0 else 0
         exp = (ganhos - perdas) / max(cm.sum(), 1)

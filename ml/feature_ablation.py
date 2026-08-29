@@ -68,14 +68,14 @@ def train_and_eval(X_train, y_train, X_test, y_test, features, nome):
     acc = accuracy_score(y_test, y_pred)
     auc = roc_auc_score(y_test, y_prob) if len(set(y_test)) > 1 else 0.5
     
-    # Profit factor simulado
+    # v11.6: Profit factor CORRIGIDO — TN não é lucro
     cm = [[0,0],[0,0]]
     for yt, yp in zip(y_test, y_pred):
         cm[yt][yp] += 1
     tp, fn, fp, tn = cm[1][1], cm[1][0], cm[0][1], cm[0][0]
-    ganhos = (tp + tn) * 50
+    ganhos = tp * 50  # TN não conta — é 'não-trade'
     perdas = (fp + fn) * 30
-    pf = ganhos / perdas if perdas > 0 else 999
+    pf = ganhos / perdas if perdas > 0 else 0.0
     
     return {
         'nome': nome,

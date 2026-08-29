@@ -55,7 +55,7 @@ for d in dias_teste:
         auc = roc_auc_score((yt[mb]==1).astype(int), y_proba[mask][mb][:, list(modelo.classes_).index(1)]) if len(np.unique((yt[mb]==1).astype(int))) > 1 else 0.5
     except: auc = 0.5
     cm = confusion_matrix(yt, yp, labels=[-1,1])
-    ganhos = cm[1,1]*100+cm[0,0]*100
+    ganhos = cm[1,1]*100  # v11.6: TN nao e lucro
     perdas = cm[1,0]*50+cm[0,1]*50
     pf = ganhos/max(perdas,1)
     print(f"  Dia {int(d)}: n={n:5d} | acc={acc:.3f} AUC={auc:.3f} PF={pf:.2f}")
@@ -67,7 +67,7 @@ try:
     auc_g = roc_auc_score((y_test.values[mb]==1).astype(int), y_proba[mb][:, list(modelo.classes_).index(1)])
 except: auc_g = 0.5
 cm_g = confusion_matrix(y_test, y_pred, labels=[-1,1])
-ganhos_g = cm_g[1,1]*100+cm_g[0,0]*100
+ganhos_g = cm_g[1,1]*100  # v11.6: TN nao e lucro
 perdas_g = cm_g[1,0]*50+cm_g[0,1]*50
 pf_g = ganhos_g/max(perdas_g,1)
 exp_g = (ganhos_g-perdas_g)/max(len(y_test),1)

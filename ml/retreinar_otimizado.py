@@ -171,20 +171,25 @@ def main():
     cm = confusion_matrix(y_test, y_pred)
     tn, fp, fn, tp = cm.ravel()
     
-    # Profit factor simulado
-    ganhos = (tp + tn) * 50
+    # v11.6: Profit factor CORRIGIDO — TN não é lucro, é 'não-trade'
+    # TP: trade lucrativo (ganho)
+    # FP: trade falso positivo (perda)
+    # FN: oportunidade perdida (perda)
+    # TN: não-trade (neutro — não conta no P&L)
+    ganhos = tp * 50
     perdas = (fp + fn) * 30
-    pf = ganhos / perdas if perdas > 0 else 999
+    pf = ganhos / perdas if perdas > 0 else 0.0
     
     print(f'\n  Accuracy:  {acc:.4f}')
     print(f'  AUC:       {auc:.4f}')
     print(f'  ECE:       {ece:.4f}')
     print(f'  Profit F.: {pf:.2f}')
+    print(f'  Trades:    {tp + fp} (TP={tp}, FP={fp}, FN={fn}, TN={tn} não-conta)')
     print(f'\n  Matriz de confusão:')
-    print(f'    TN (Vendeu→caiu):   {tn}')
-    print(f'    FP (Vendeu→subiu):  {fp}')
-    print(f'    FN (Comprou→caiu):  {fn}')
-    print(f'    TP (Comprou→subiu): {tp}')
+    print(f'    TN (não-trade):     {tn} (neutro)')
+    print(f'    FP (falso positivo): {fp} (perda)')
+    print(f'    FN (oportunidade):   {fn} (perda)')
+    print(f'    TP (trade lucro):    {tp} (ganho)')
     
     # Feature importance
     if hasattr(modelo, 'feature_importances_'):
