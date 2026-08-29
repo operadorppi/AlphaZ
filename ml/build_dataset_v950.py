@@ -430,6 +430,31 @@ def main():
     print(f"\n10. Salvando v950: {OUTPUT}")
     df.to_parquet(OUTPUT, index=False)
     
+    # v11.19: Hash SHA256 + manifest
+    import hashlib, json
+    from datetime import datetime
+    sha256 = hashlib.sha256()
+    with open(OUTPUT, 'rb') as f:
+        for chunk in iter(lambda: f.read(8192), b''):
+            sha256.update(chunk)
+    dataset_hash = sha256.hexdigest()
+    
+    manifest = {
+        'dataset_path': OUTPUT,
+        'hash_sha256': dataset_hash,
+        'n_rows': int(df.shape[0]),
+        'n_cols': int(df.shape[1]),
+        'columns': list(df.columns),
+        'ativo_filter': 'WINV26',
+        'generated_at': datetime.now().isoformat(),
+        'version': 'v950',
+    }
+    manifest_path = OUTPUT.replace('.parquet', '_manifest.json')
+    with open(manifest_path, 'w', encoding='utf-8') as f:
+        json.dump(manifest, f, indent=2, ensure_ascii=False)
+    print(f"  Hash: {dataset_hash[:16]}...")
+    print(f"  Manifest: {manifest_path}")
+    
     # 13. Relatório
     print(f"\n{'=' * 60}")
     print(f"RESULTADO v950:")

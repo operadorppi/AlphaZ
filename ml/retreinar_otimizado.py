@@ -86,6 +86,29 @@ def main():
     
     # Carregar dados
     print(f'\nCarregando dataset: {DATASET}')
+    
+    # v11.19: Validar hash do dataset
+    import hashlib
+    sha256 = hashlib.sha256()
+    with open(DATASET, 'rb') as f:
+        for chunk in iter(lambda: f.read(8192), b''):
+            sha256.update(chunk)
+    current_hash = sha256.hexdigest()
+    print(f'  Hash: {current_hash[:16]}...')
+    
+    # Verificar se modelo antigo é válido
+    if os.path.exists(MODELO_OUT):
+        import pickle
+        with open(MODELO_OUT, 'rb') as f:
+            old_blob = pickle.load(f)
+        old_hash = old_blob.get('dataset_hash', '')
+        if old_hash and old_hash != current_hash:
+            print(f'  [WARNING] Dataset mudou desde o ultimo treino!')
+            print(f'    Anterior: {old_hash[:16]}...')
+            print(f'    Atual:    {current_hash[:16]}...')
+        else:
+            print(f'  Dataset consistente com modelo anterior')
+    
     df = pd.read_parquet(DATASET)
     df = df[df['ativo'] == 'WINV26'].copy()
     df['data'] = pd.to_datetime(df['ts_ms'], unit='ms', utc=True).dt.date
@@ -256,6 +279,7 @@ def main():
             },
             'version': '5.0.0',
             'train_date': str(date.today()),
+            'dataset_hash': current_hash,
         }, f)
     
     print(f'  Modelo salvo: {MODELO_OUT}')
