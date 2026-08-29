@@ -27,25 +27,51 @@ from collections import defaultdict
 
 
 class ProbabilityCalibrator:
-    """Calibrador de probabilidades do modelo ML."""
+    """Calibrador de probabilidades do modelo ML.
     
-    def __init__(self, n_bins: int = 10):
+    Thresholds por regime (default baseado em domain knowledge):
+    - tendencia_alta: 0.65 (menos trades, mais certos)
+    - tendencia_baixa: 0.60
+    - lateral: 0.55 (mais trades, aproveita ruído)
+    - volatil_alta: 0.70 (muito cuidado)
+    - volatil_baixa: 0.58
+    """
+    
+    # Defaults por regime (domain knowledge, refinados pelo aprendizado)
+    DEFAULT_THRESHOLDS = {
+        'tendencia_alta': 0.65,
+        'tendencia_baixa': 0.60,
+        'lateral': 0.55,
+        'volatil_alta': 0.70,
+        'volatil_baixa': 0.58,
+    }
+    
+    def __init__(self, n_bins: int = 10, save_dir: str = None):
         self.n_bins = n_bins
         self.bin_edges = np.linspace(0, 1, n_bins + 1)
+        self.save_dir = save_dir
         
         # Estado acumulado
         self._predictions = []  # probabilidades preditas
         self._outcomes = []     # resultados reais (0/1)
         self._regimes = []      # regime na hora da predição
         
-        # Thresholds calibrados
-        self.threshold_default = 0.5
-        self.thresholds_by_regime = {}
+        # Thresholds calibrados (inicia com defaults)
+        self.threshold_default = 0.58
+        self.thresholds_by_regime = dict(self.DEFAULT_THRESHOLDS)
         
         # Métricas
         self.brier_score = 0.0
         self.calibration_curve = {}
         self.expected_calibration_error = 0.0
+        
+        # Auto-save
+        self._last_save_count = 0
+        self._save_interval = 100  # salva a cada 100 predições
+        
+        # Carregar estado salvo
+        if save_dir:
+            self._load_state()
     
     def update(self, predicted_prob: float, actual_outcome: int, regime: str = 'lateral'):
         """Registra uma predição e seu resultado.
@@ -62,6 +88,11 @@ class ProbabilityCalibrator:
         # Recalcular métricas a cada 100 predições
         if len(self._predictions) % 100 == 0:
             self._recalcular()
+        
+        # Auto-save a cada _save_interval predições
+        if len(self._predictions) - self._last_save_count >= self._save_interval:
+            self._last_save_count = len(self._predictions)
+            self._save_state()
     
     def _recalcular(self):
         """Recalcula todas as métricas de calibração."""
@@ -167,10 +198,56 @@ class ProbabilityCalibrator:
             }
     
     def get_threshold(self, regime: str = 'lateral') -> float:
-        """Retorna threshold calibrado para o regime."""
-        if regime in self.thresholds_by_regime:
-            return self.thresholds_by_regime[regime]['threshold']
-        return self.threshold_default
+        """Retorna threshold calibrado para o regime.
+        
+        Suporta dois formatos:
+        - float direto (defaults por regime)
+        - dict com chave 'threshold' (calibrado por dados)
+        """
+        val = self.thresholds_by_regime.get(regime)
+        if val is None:
+            return self.threshold_default
+        if isinstance(val, dict):
+            return val.get('threshold', self.threshold_default)
+        return float(val)
+    
+    def _save_state(self):
+        """Persiste estado da calibração em disco."""
+        if not self.save_dir:
+            return
+        path = os.path.join(self.save_dir, 'calibration_state.json')
+        try:
+            data = {
+                'threshold_default': self.threshold_default,
+                'thresholds_by_regime': self.thresholds_by_regime,
+                'brier_score': self.brier_score,
+                'ece': self.expected_calibration_error,
+                'n_predictions': len(self._predictions),
+                'calibration_curve': self.calibration_curve,
+                'saved_at': datetime.now().isoformat(),
+            }
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+        except Exception:
+            pass  # nunca falhar por persistência
+    
+    def _load_state(self):
+        """Carrega estado da calibração do disco."""
+        if not self.save_dir:
+            return
+        path = os.path.join(self.save_dir, 'calibration_state.json')
+        if not os.path.exists(path):
+            return
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            self.threshold_default = data.get('threshold_default', self.threshold_default)
+            self.thresholds_by_regime = data.get('thresholds_by_regime', self.thresholds_by_regime)
+            self.brier_score = data.get('brier_score', 0)
+            self.expected_calibration_error = data.get('ece', 0)
+            self.calibration_curve = data.get('calibration_curve', {})
+        except Exception:
+            pass
     
     def get_metrics(self) -> Dict[str, Any]:
         """Retorna todas as métricas de calibração."""
@@ -181,6 +258,10 @@ class ProbabilityCalibrator:
             'calibration_curve': self.calibration_curve,
             'thresholds_by_regime': self.thresholds_by_regime,
             'threshold_default': self.threshold_default,
+            'defaults_aplicados': {
+                k: v for k, v in self.DEFAULT_THRESHOLDS.items()
+                if k not in self.thresholds_by_regime or self.thresholds_by_regime[k] == v
+            },
         }
     
     def plot_calibration_curve(self) -> str:
@@ -209,8 +290,10 @@ class ProbabilityCalibrator:
 class ThresholdOptimizer:
     """Otimizador de thresholds por regime e custo."""
     
-    def __init__(self, custo_execucao: float = 5.0):
+    def __init__(self, custo_execucao: float = 5.0, tp_pts: float = 100.0, sl_pts: float = 50.0):
         self.custo_execucao = custo_execucao
+        self.tp_pts = tp_pts
+        self.sl_pts = sl_pts
         self._historico = []
     
     def optimize(self, predictions: np.ndarray, outcomes: np.ndarray,
@@ -243,14 +326,11 @@ class ThresholdOptimizer:
             # Resultado desses trades
             trade_outcomes = outcomes[trades]
             
-            # Lucro simulado
+            # Lucro simulado usando TP/SL do config
             n_wins = trade_outcomes.sum()
             n_losses = len(trade_outcomes) - n_wins
             
-            # Assumindo TP=50, SL=30 (ajustar conforme config)
-            tp_pts = 50
-            sl_pts = 30
-            profit = n_wins * tp_pts - n_losses * sl_pts - len(trade_outcomes) * self.custo_execucao
+            profit = n_wins * self.tp_pts - n_losses * self.sl_pts - len(trade_outcomes) * self.custo_execucao
             
             win_rate = n_wins / len(trade_outcomes) if len(trade_outcomes) > 0 else 0
             
@@ -397,15 +477,17 @@ class ModelDecisionSeparator:
 def create_calibration_system(config: Dict = None) -> ModelDecisionSeparator:
     """Cria sistema de calibração completo."""
     config = config or {}
+    save_dir = config.get('save_dir', 'D:\\MarketData\\mimo')
     
-    calibrator = ProbabilityCalibrator(n_bins=10)
-    custo = config.get('trading', {}).get('custo_execucao', {}).get('WIN', 5.0)
+    # TP/SL do config
+    custo = config.get('custo_execucao_win', 5.0)
+    tp = config.get('tp_base', 100.0)
+    sl = config.get('sl_base', 50.0)
+    
+    calibrator = ProbabilityCalibrator(n_bins=10, save_dir=save_dir)
+    optimizer = ThresholdOptimizer(custo_execucao=custo, tp_pts=tp, sl_pts=sl)
     
     separator = ModelDecisionSeparator(calibrator, custo_execucao=custo)
-    
-    # Tentar carregar estado salvo
-    save_dir = config.get('save_dir', 'D:\\MarketData\\mimo')
-    state_path = os.path.join(save_dir, 'calibration_state.json')
-    separator.load(state_path)
+    separator.optimizer = optimizer  # anexar otimizador
     
     return separator

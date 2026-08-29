@@ -131,9 +131,14 @@ class DashboardHandlers:
 
     @staticmethod
     def handle_api_ml_health(handler, params=None):
+        result = {}
         if handler.app.scorer:
-            return handler.app.scorer.estado_salud()
-        return {"error": "Scorer not initialized"}
+            result = handler.app.scorer.estado_salud()
+        # v11.10: Adicionar dados de calibração
+        if hasattr(handler.app.signal, 'calibration') and handler.app.signal.calibration:
+            sep = handler.app.signal.calibration
+            result['calibration'] = sep.calibrator.get_metrics() if hasattr(sep, 'calibrator') else {}
+        return result if result else {"error": "Scorer not initialized"}
 
     @staticmethod
     def handle_api_historico(handler, params=None):

@@ -135,6 +135,10 @@ class App:
         # ML Scorer (opcional)
         self.scorer = None
         self._carregar_scorer()
+        
+        # v11.10: Injetar calibrador no position_manager para feedback loop
+        if hasattr(self.signal, 'calibration') and self.signal.calibration:
+            self.position._calibration = self.signal.calibration
 
         self.latencia_atual_ms = 0.0
         self.eventos_processados = 0

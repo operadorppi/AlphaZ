@@ -152,7 +152,8 @@ class PositionManager:
                 'prev_idx': len(self.learning.previsoes) - 1 if self.learning else 0,
                 'mfe': 0.0, 'mae': 0.0, 'breakeven_ativado': False,
                 'regime_abertura': regime or 'indefinido',
-                'quantidade': quantidade
+                'quantidade': quantidade,
+                'ml_prob': getattr(signal, 'ml_prob', 0.5)
             }
             self.risk.trades_dia += 1
             if self.persistence:
@@ -257,6 +258,13 @@ class PositionManager:
             self.learning.aprender_mfe_mae(pos.get('contrib', []), acertou,
                                           pos.get('mfe', 0), pos.get('mae', 0),
                                           regime_abertura=pos.get('regime_abertura'))
+        
+        # v11.10: Alimentar calibrador ML com resultado do trade
+        if hasattr(self, '_calibration') and self._calibration:
+            ml_prob = pos.get('ml_prob', 0.5)
+            regime = pos.get('regime_abertura', 'lateral')
+            outcome = 1 if acertou else 0
+            self._calibration.update(ml_prob, outcome, regime=regime)
 
         # Captura offsets antes de limpar a posição
         sl_abs = pos.get('stop_preco', 0.0)
