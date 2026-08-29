@@ -1,3 +1,32 @@
+## v11.3 — Fix Cross-Asset Contamination no Labeler (29/08/2026)
+
+### BUG CRÍTICO: retorno_pts contaminado entre ativos
+
+**Problema:** O labeler processava WIN (~170000 pts) e WDO (~5100 pts) juntos no mesmo array. Quando timestamps se interleavavam (ambos no mesmo segundo), o `_segmentos()` criava micro-segmentos que misturavam preços de ativos diferentes.
+
+**Evidência:**
+```
+preco_entrada = 5109.5   (preço WDO!)
+preco_saida   = 182899.0  (preço WIN!)
+retorno_pts   = 177789.5  (mistura WDO ↔ WIN!)
+```
+
+Walk-forward mostrava expectancy +1266 pts e PF 256 — fisicamente impossível.
+
+**Correção:** `processar_jsonl()` agora detecta múltiplos ativos e processa cada um SEPARADAMENTE:
+
+```python
+if len(ativos_unicos) > 1 and ativo_filter is None:
+    for ativo in ativos_unicos:
+        mask = ativos_arr == ativo
+        res = label_vectorizado(precos[mask], ts[mask], ativos[mask], ...)
+    resultado = np.concatenate(resultados)
+```
+
+**Validado:** WINV26 com dados interleavados gera retorno_pts=100 (correto) em vez de 0 (bugado).
+
+---
+
 ## v11.2 — Validação de Timestamp no Parquet (29/08/2026)
 
 ### Problema
