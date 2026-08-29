@@ -33,9 +33,9 @@ from sklearn.metrics import (
     f1_score, confusion_matrix, brier_score_loss,
 )
 
-PATH = 'D:/MarketData/mimo/26/dataset_final_v2_win_v914.parquet'
-PATH_COMPL = 'D:/MarketData/mimo/26/dataset_final_completo.parquet'
-OUT = 'walk_forward_v914_limpo.json'
+PATH = 'D:/MarketData/mimo/26/dataset_final_WINV26_v950.parquet'  # v11.20: limpo, so WIN
+PATH_COMPL = None  # v11.20: nao usar completo (contaminado)
+OUT = 'walk_forward_v950.json'
 PURGE_S = 30
 EMBARGO_S = 30
 SEED = 42
@@ -131,7 +131,7 @@ def run():
         blob = _pk.load(_f)
     feat_cols = list(blob['features'])
 
-    _path = PATH_COMPL if os.path.exists(PATH_COMPL) else PATH
+    _path = PATH if (PATH_COMPL is None or not os.path.exists(PATH_COMPL)) else PATH_COMPL
     print(f'[walk_forward] usando: {_path}')
     schema = pq.read_schema(_path)
     todas = set(schema.names)

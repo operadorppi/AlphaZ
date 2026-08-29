@@ -12,7 +12,7 @@ import pandas as pd
 from sklearn.metrics import accuracy_score, roc_auc_score, confusion_matrix
 from datetime import date, datetime
 
-PARQUET_PATH = r'D:\MarketData\mimo\dataset_final_v2_win_v914.parquet'
+PARQUET_PATH = r'D:\MarketData\mimo\26\dataset_final_WINV26_v950.parquet'  # v11.20: limpo
 # v9.32: dataset enriquecido com ajuste oficial + VWAP + regime
 PARQUET_PATH_COMPL = r'D:\MarketData\mimo\26\dataset_final_completo.parquet'
 OLD_MODEL_PATH = r'D:\MarketData\mimo\26\modelo_lgbm_v3.pkl'

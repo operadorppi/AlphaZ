@@ -30,10 +30,9 @@ try:
 except ImportError:
     USE_CACHE = False
 
-PATH = 'D:/MarketData/mimo/26/dataset_final_v2_win_v914.parquet'
-# v9.32: dataset enriquecido com ajuste oficial + VWAP + regime
-PATH_COMPL = 'D:/MarketData/mimo/26/dataset_final_completo.parquet'
-OUT = 'walk_forward_v914_limpo.json'
+PATH = 'D:/MarketData/mimo/26/dataset_final_WINV26_v950.parquet'  # v11.20: limpo
+PATH_COMPL = None  # v11.20: nao usar completo (contaminado)
+OUT = 'walk_forward_v950.json'
 COSTO = 5.0
 PURGE_S = 30
 EMBARGO_S = 30
@@ -77,7 +76,7 @@ def run():
     feat_cols = list(blob['features'])
     # v9.32: preferir dataset enriquecido se existir
     import os as _os
-    _path = PATH_COMPL if _os.path.exists(PATH_COMPL) else PATH
+    _path = PATH if (PATH_COMPL is None or not _os.path.exists(PATH_COMPL)) else PATH_COMPL
     print(f'[walk_forward] usando: {_path} (cache={USE_CACHE})')
     schema = pq.read_schema(_path)
     todas = set(schema.names)
