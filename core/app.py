@@ -3,6 +3,7 @@
 core/app.py — Orquestrador principal com loop RTD completo.
 
 v10.0 — Migração completa do loop RTD de motor_rt_alphaz.py.
+v11.0 — CaptureDaemon: captura bruta em thread imortal separada do trading.
 
 Estrutura:
   App
@@ -15,7 +16,7 @@ Estrutura:
   ├── Persistence        (trades, decisões, checkpoints)
   ├── Metrics            (acuracia, PF, Sharpe)
   ├── EventClock          (relógio mestre)
-  ├── FileStorage        (captura bruta JSONL)
+  ├── CaptureDaemon     (captura bruta JSONL — thread imortal)
   ├── ScorerML           (ML, opcional)
   └── Loop RTD            (PumpEvents, RefreshData, reconexão)
 """
@@ -45,6 +46,7 @@ def _load_root_config():
 
 from adapters.com_watchdog import COMHeartbeatMonitor
 from adapters.file_storage import flush_buffers_with_retry
+from core.capture_daemon import CaptureDaemon
 from core.contracts import MarketEvent, TradeEvent, BookSnapshot, Signal
 from core.market_state import (
     MarketState, EstadoAtivo, extrair_book_snapshot, comparar_books,
@@ -64,7 +66,6 @@ from features.feature_engine import FeatureEngine
 from core.utils import fnum, fint, sstr, parse_hms_ms, tod_ms
 from adapters.dashboard_server import DashboardServer
 
-from adapters.file_storage import FileStorage, CapturaEventosMS
 
 ERROS_GLOBAIS = defaultdict(int)
 
@@ -115,7 +116,7 @@ class App:
             feature_hits=self.learning.feature_hits,
             acuracia=self.learning.acuracia,
         )
-        self.captura = FileStorage(self.save_dir, self.session_ts)
+        self.capture_daemon = CaptureDaemon(self.save_dir, self.session_ts)
         self.journal = DecisionJournal(self.save_dir, self.session_ts)
         self.dashboard = DashboardServer(
             self,
@@ -183,8 +184,13 @@ class App:
                 time.sleep(0.5)
         threading.Thread(target=persistence_worker, daemon=True).start()
 
+        # Iniciar daemon de captura (thread imortal)
+        self.capture_daemon.start()
+        log.info('[APP] Capture daemon iniciado')
+
         if not self.data_source.connect():
             log.error("[APP] Falha ao conectar à fonte de dados.")
+            self.capture_daemon.stop()
             return
 
         self.dashboard.start()
@@ -219,15 +225,19 @@ class App:
                         log.error('[ML] scorer %d falhas (erro: %s)', est['fallos'], est.get('ultimo_error'))
 
 
-                # Saúde da captura
+                # Saúde do capture daemon
                 if time.time() - ultimo_captura_log > 600:
                     ultimo_captura_log = time.time()
-                    if self.captura:
-                        rej = self.captura.stats()
+                    health = self.capture_daemon.health_check()
+                    if not health['alive']:
+                        log.error('[CAPTURE-DAEMON] Thread morta! Reiniciando...')
+                        self.capture_daemon.start()
+                    elif health['queue_pct'] > 80:
+                        log.warning(f"[CAPTURE-DAEMON] Fila alta: {health['queue_pct']}%")
+                    else:
+                        rej = health.get('storage_rejeitados', {})
                         if any(rej.values()):
-                            log.warning(f"[CAPTURA] rejeitados: {rej}")
-                        else:
-                            log.info("[CAPTURA] saudável (0 rejeitados)")
+                            log.warning(f"[CAPTURE-DAEMON] rejeitados: {rej}")
 
                 # Verificar saídas (intervalo de 250ms)
                 if agora - ultimo_preco_check >= 0.25:
@@ -241,8 +251,7 @@ class App:
                 if time.time() - ultimo_save >= self.config.get('save_intervalo', 60):
                     ultimo_save = time.time()
                     self.salvar_sessao()
-                    if self.captura:
-                        self.captura.flush()
+                    self.capture_daemon.flush()
                 
                 # Fase 7: Registro de latência para o Dashboard
                 self.latencia_atual_ms = (time.perf_counter() - t0) * 1000
@@ -263,8 +272,8 @@ class App:
             # 1. Alimentar market_state (Domínio)
             self.market_state.alimentar_negocio(trade)
             
-            # 2. Gravação de captura bruta (Infra)
-            self.captura.registrar_negocios([(
+            # 2. Gravação de captura bruta (Infra) — via daemon imortal
+            self.capture_daemon.registrar_negocios([(
                 trade.symbol, trade.timestamp_ms, trade.price, trade.quantity,
                 trade.aggressor, trade.buyer, trade.seller
             )])
@@ -355,7 +364,7 @@ class App:
                 'ask_preco': [l.price for l in snapshot.asks[:500]],
                 'ask_vol': [l.volume for l in snapshot.asks[:500]],
             }
-            self.captura.registrar_book(snapshot.symbol, snapshot.timestamp_ms,
+            self.capture_daemon.registrar_book(snapshot.symbol, snapshot.timestamp_ms,
                                         snap_dict, bid_vol, ask_vol, levels=levels_data)
             
             # 3. Alimentar Scorer ML com o Book
@@ -364,11 +373,14 @@ class App:
 
     # ---- Getters para o dashboard ----
 
+    def get_capture_health(self) -> dict:
+        """Retorna o status de saúde do capture daemon."""
+        return self.capture_daemon.health_check()
+
     def get_rtd_health(self) -> dict:
         """Retorna o status de saúde da fonte de dados."""
         if not self.data_source:
             return {'status': 'error', 'motivo': 'sem fonte de dados'}
-        # Refatorar: App deve pedir o status ao data_source agora
         return self.data_source.get_health()
 
     def get_contexto_mercado(self):
@@ -465,10 +477,9 @@ class App:
             salvar_aprendizado=self.learning.salvar,
             padroes=self.market_state.padroes,
         )
-        if self.captura:
-            self.captura.flush()
-            if final:
-                self.captura.fechar()
+        self.capture_daemon.flush()
+        if final:
+            self.capture_daemon.stop()
 
     def _verificar_staleness_reconexao(self):
         """Verifica se algum ativo perdeu dados (staleness) e reconecta se necessário.
@@ -510,6 +521,7 @@ class App:
     def parar(self):
         self._shutdown.set()
         self.dashboard.stop()
+        self.capture_daemon.stop()
         self.salvar_sessao(final=True)
         log.info('[APP] Shutdown completo')
 
