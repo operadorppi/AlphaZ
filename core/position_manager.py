@@ -40,6 +40,7 @@ class PositionManager:
         self._lado_anterior = 0
         self.sinal_contador = 0
         self.confianca_ewma = 0.0
+        self._cooldown_until = 0.0  # v11.16: timestamp (time.time()) até quando bloqueado
 
     def suavizar(self, lado_bruto, confirmacao_necessaria=None):
         """Suavização de sinal com confirmação por N segmentos."""
@@ -122,6 +123,12 @@ class PositionManager:
                 tp=pos['tp'], sl=sl_offset,
                 motivo=''
             )
+
+        # v11.16: Cooldown pós-fechamento — bloqueia reentrada imediata
+        if time.time() < self._cooldown_until:
+            restante = self._cooldown_until - time.time()
+            return Action(tipo='COOLDOWN', lado='', preco=preco, tp=0.0, sl=0.0,
+                          motivo=f'cooldown {restante:.1f}s restantes')
 
         if sinal_valido and preco > 0 and self._sinal_streak >= 2:
             # v10.21: Injeção de RiskDecision para desacoplamento. Se não injetado, consulta o manager local.
@@ -300,6 +307,10 @@ class PositionManager:
         self.sinal_confirmado = 0
         self._lado_anterior = 0
         self.sinal_contador = 0
+        
+        # v11.16: Cooldown pós-fechamento
+        cooldown_ms = self.config.get('cooldown_entre_trades_ms', 5000)
+        self._cooldown_until = time.time() + (cooldown_ms / 1000.0)
         if self.persistence:
             self.persistence.salvar_checkpoint(None)
         
