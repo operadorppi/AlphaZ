@@ -86,7 +86,14 @@ class Learning:
         self.pesos_regime['lateral']['ofi_ewma'] = 0.1
 
     def aprender_mfe_mae(self, contrib, acertou, mfe, mae, regime_abertura=None):
-        """Ajusta pesos por MFE/MAE com decay."""
+        """Ajusta pesos por MFE/MAE com decay.
+        
+        v11.14: Aprendizado SÓ DESTRÓI, nunca cria.
+        - Decay: reduz peso gradualmente (floor = 30% do inicial)
+        - Feature death: mata features com acuracia < 40% após 40+ amostras
+        - NÃO aumenta pesos online (evita overfitting em ruído)
+        - Boost de pesos SÓ acontece via retreino com cross-validation
+        """
         if not contrib:
             return
         decay = self.config.get('aprendizado_decay', 0.95)
@@ -97,7 +104,7 @@ class Learning:
             inicial = PESOS_INICIAIS.get(key, 0.0)
             floor = abs(inicial) * 0.3
             
-            # v10.11: Respeita morte global ou suspensão por regime
+            # Respeita morte global ou suspensão por regime
             if key in self.morto:
                 self.pesos[key] = 0.0
                 if regime_nome in self.pesos_regime:
@@ -108,47 +115,22 @@ class Learning:
                 if regime_nome in self.pesos_regime:
                     self.pesos_regime[regime_nome][key] = 0.0
             
+            # v11.14: Decay apenas — NÃO ajusta para cima
             atual = self.pesos.get(key, 0.0)
             self.pesos[key] = max(abs(atual) * decay, floor) * (1 if atual >= 0 else -1)
             if regime_nome in self.pesos_regime and key not in mortos_reg:
                 atual_r = self.pesos_regime[regime_nome].get(key, 0.0)
                 self.pesos_regime[regime_nome][key] = max(abs(atual_r) * decay, floor) * (1 if atual_r >= 0 else -1)
 
-        qualidade_trade = (mfe / max(abs(mae), 1.0)) if mae != 0 else 2.0
-
+        # Tracking de performance (SEM ajuste de pesos)
         for key, mult in contrib:
             if key in self.morto:
-                continue  # feature morta não re-aprende
+                continue
             h = self.feature_hits.setdefault(key, {'acertos': 0, 'erros': 0, 'per_regime': {}})
             if 'per_regime' not in h: h['per_regime'] = {}
-            amostras_previas = h['acertos'] + h['erros']
-            min_amostras = self.config.get('aprendizado_min_amostras', 20)
-            fator_confianca = min(1.0, amostras_previas / min_amostras) if amostras_previas else 0.2
-            peso_atual = self.pesos.get(key, 0.0)
-
-            if acertou:
-                alvo = 1.0 if mult >= 0 else -1.0
-            else:
-                alvo = -1.0 if mult >= 0 else 1.0
-
-            delta = self.config.get('aprendizado_delta', 0.05)
-            
-            # v10.9 (Fase 9): Learning Rate Annealing
-            # Reduz o impacto de novos trades conforme acumulamos histórico (estabilidade)
-            annealing = 1.0 / (1.0 + (amostras_previas / 100.0))
-            ajuste = delta * min(qualidade_trade, 2.0) * fator_confianca * annealing
-            
-            novo_peso = peso_atual + (alvo - peso_atual) * ajuste
-            self.pesos[key] = max(-1.0, min(1.0, novo_peso))
             h['acertos' if acertou else 'erros'] += 1
             
-            # v10.11: Atualiza peso do regime se não estiver suspenso
-            if regime_nome in self.pesos_regime and key not in mortos_reg:
-                p_r_atual = self.pesos_regime[regime_nome].get(key, 0.0)
-                novo_p_r = p_r_atual + (alvo - p_r_atual) * ajuste
-                self.pesos_regime[regime_nome][key] = max(-1.0, min(1.0, novo_p_r))
-            
-            # v10.10: Tracking de performance segmentada por regime
+            # Tracking por regime (para feature death)
             rh = h['per_regime'].setdefault(regime_nome, {'acertos': 0, 'erros': 0})
             rh['acertos' if acertou else 'erros'] += 1
 
