@@ -289,29 +289,47 @@ class SignalEngine:
             except Exception as e:
                 log.warning(f"[SIGNAL] Erro ML scorer: {e}")
 
-        # --- Sinal: ML gate + heurística confirmam ---
+        # --- Sinal: ML gate + heurística (peso dinâmico por calibração) ---
         sinal = 0
         lado_heur = lado  # direção da heurística (aggr_imb)
+        
+        # v11.13: Peso ML vs Heurística é DINÂMICO baseado no ECE
+        # ECE alto (ruim) → ML menos confiável → heurística pesa mais
+        # ECE baixo (bom) → ML confiável → ML domina
+        ece = getattr(self.calibration.calibration, 'brier_score', 0.0) if hasattr(self, 'calibration') else 0.0
+        ml_weight = 0.5  # default: peso igual
+        if ece > 0.15:
+            ml_weight = 0.3   # ECE ruim: heurística domina
+            motivos.append(f'ECE={ece:.3f}(ruim)')
+        elif ece > 0.05:
+            ml_weight = 0.5   # ECE ok: peso igual
+        elif ece > 0:
+            ml_weight = 0.7   # ECE bom: ML domina
+            motivos.append(f'ECE={ece:.3f}(bom)')
         
         if ml_available and ml_decision:
             ml_dir = 1 if ml_decision['trading_decision'] == 'C' else (
                 -1 if ml_decision['trading_decision'] == 'V' else 0)
             
             if ml_gate_pass:
-                # ML diz que há edge — heurística precisa confirmar direção
+                # ML diz que há edge — combinar com heurística
                 if lado_heur == ml_dir:
-                    # Concordância: ML + heurística → sinal forte
+                    # Concordância: peso maior
                     sinal = ml_dir
-                    score = abs(score) * 1.5  # amplifica por concordância
-                    motivos.append('ML_HEUR_CONCORDAM')
-                elif score > 0.3:
-                    # Heurística fraca, mas ML forte → permite (com desconto)
+                    score = abs(score) * (1.0 + ml_weight)
+                    motivos.append(f'ML_HEUR_OK (w={ml_weight:.1f})')
+                elif ml_weight >= 0.6 and abs(score) < 0.3:
+                    # ML forte, heurística fraca → ML domina
                     sinal = ml_dir
                     score = abs(score) * 0.8
-                    motivos.append(f'ML_DOMINA (heur={score:.2f})')
+                    motivos.append(f'ML_DOMINA (w={ml_weight:.1f})')
+                elif score > 0.5 and ml_weight < 0.5:
+                    # Heurística forte, ML fraco → heurística domina
+                    sinal = lado_heur
+                    score = abs(score) * 1.2
+                    motivos.append(f'HEUR_DOMINA (w={1-ml_weight:.1f})')
                 else:
-                    # Heurística fraca E discorda → não trade
-                    motivos.append(f'HEUR_FRACA_DISCORDA (h={score:.2f})')
+                    motivos.append(f'ML_HEUR_DISCORDAM (w={ml_weight:.1f})')
             else:
                 # ML bloqueou — heurística sozinha NÃO gera sinal
                 motivos.append('ML_BLOQUEOU')

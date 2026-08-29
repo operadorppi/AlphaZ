@@ -137,7 +137,16 @@ class DashboardHandlers:
         # v11.10: Adicionar dados de calibração
         if hasattr(handler.app.signal, 'calibration') and handler.app.signal.calibration:
             sep = handler.app.signal.calibration
-            result['calibration'] = sep.calibrator.get_metrics() if hasattr(sep, 'calibrator') else {}
+            cal_metrics = sep.calibrator.get_metrics() if hasattr(sep, 'calibrator') else {}
+            result['calibration'] = cal_metrics
+            # v11.13: ECE ao vivo para o dashboard
+            result['ml_quality'] = {
+                'ece': cal_metrics.get('ece', 0),
+                'brier': cal_metrics.get('brier_score', 0),
+                'n_predictions': cal_metrics.get('n_predictions', 0),
+                'thresholds_by_regime': cal_metrics.get('thresholds_by_regime', {}),
+                'ml_weight': 0.3 if cal_metrics.get('ece', 0) > 0.15 else (0.7 if cal_metrics.get('ece', 0) < 0.05 else 0.5),
+            }
         return result if result else {"error": "Scorer not initialized"}
 
     @staticmethod
