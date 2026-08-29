@@ -287,13 +287,30 @@ def run():
         
         m_princ = metrics_por_thr[str(THRESH_PRINCIPAL)]
 
-        # Feature importance (top 10)
-        if hasattr(clf, 'feature_importances_'):
-            imp = dict(zip(Xcols, clf.feature_importances_))
+        # Feature importance (top 10) — do modelo LUCRO
+        if hasattr(clf_lucro, 'feature_importances_'):
+            imp = dict(zip(Xcols, clf_lucro.feature_importances_))
             top10 = sorted(imp.items(), key=lambda x: -x[1])[:10]
             top10_feat = {f: round(float(v), 1) for f, v in top10}
         else:
             top10_feat = {}
+        
+        # v11.12: ECE e Calibration Curve por fold
+        ece_val = _ece(y_te_lucro.astype(float), prob_lucro)
+        
+        # Calibration Curve: agrupar predições em bins e comparar com reality
+        cal_bins = {}
+        bin_edges = np.linspace(0, 1, 11)
+        for lo, hi in zip(bin_edges[:-1], bin_edges[1:]):
+            mask = (prob_lucro >= lo) & (prob_lucro < hi)
+            if mask.sum() == 0:
+                continue
+            cal_bins[f'{lo:.1f}-{hi:.1f}'] = {
+                'predicted': round(float(prob_lucro[mask].mean()), 4),
+                'observed': round(float(y_te_lucro[mask].mean()), 4),
+                'count': int(mask.sum()),
+                'gap': round(abs(float(prob_lucro[mask].mean()) - float(y_te_lucro[mask].mean())), 4),
+            }
 
         # Distribuição de probabilidades
         prob_stats = {
@@ -316,6 +333,8 @@ def run():
             'prevalence_perda': round(float(y_te_perda.mean()), 4),
             'auc_lucro': auc_lucro,
             'auc_perda': auc_perda,
+            'ece_lucro': ece_val,
+            'calibration_curve': cal_bins,
             'metrics_por_threshold': metrics_por_thr,
             'threshold_principal': m_princ,
             'prob_distribuicao': prob_stats,
@@ -327,9 +346,8 @@ def run():
                       f, ensure_ascii=False, indent=2)
 
         print(f'fold {len(folds)} {data_dia[test_day]} '
-              f'auc={auc} ece={ece} brier={brier} '
-              f'acc@0.6={m_princ["accuracy"]} prec@0.6={m_princ["precision"]} '
-              f'rec@0.6={m_princ["recall"]}', flush=True)
+              f'auc_lucro={auc_lucro} auc_perda={auc_perda} ece={ece_val} '
+              f' trades@{THRESH_PRINCIPAL}={m_princ.get("n_trades", 0)}', flush=True)
 
     # === Resumo global ===
     aucs = [f['auc'] for f in folds if f.get('auc') is not None]
@@ -339,10 +357,11 @@ def run():
     # Resumo global
     aucs_l = [f['auc_lucro'] for f in folds if f.get('auc_lucro') is not None]
     aucs_p = [f['auc_perda'] for f in folds if f.get('auc_perda') is not None]
+    eces = [f['ece_lucro'] for f in folds if f.get('ece_lucro') is not None]
 
     res = {
-        'descricao': 'Walk-forward v11.5: target ternario com custo',
-        'versao': 'v11.5',
+        'descricao': 'Walk-forward v11.12: metricas de qualidade (AUC+ECE+calibration)',
+        'versao': 'v11.12',
         'dataset': _path,
         'modelo': MODELO,
         'features': len(Xcols),
@@ -350,10 +369,12 @@ def run():
         'purge_s': PURGE_S,
         'embargo_s': EMBARGO_S,
         'target': 'ternario (lucro/perda/neutro) com custo',
+        'metricas': 'AUC, ECE, calibration curve, precision/recall por threshold',
         'resumo_global': {
             'n_folds': len(folds),
             'auc_lucro_media': round(float(np.mean(aucs_l)), 4) if aucs_l else None,
             'auc_perda_media': round(float(np.mean(aucs_p)), 4) if aucs_p else None,
+            'ece_lucro_media': round(float(np.mean(eces)), 4) if eces else None,
         },
         'folds': folds,
     }
