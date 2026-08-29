@@ -224,7 +224,12 @@ def label_vectorizado(precos, ts_ms, ativos,
 def processar_jsonl(input_path, output_path, ativo_filter=None,
                     tp_pts=None, sl_pts=None, max_holding_s=None, purge_s=0,
                     min_vol=None):
-    """Processa JSONL e gera labels."""
+    """Processa JSONL e gera labels.
+
+    v11.3: Quando ativo_filter=None (múltiplos ativos), processa cada
+    ativo SEPARADAMENTE para evitar contaminação cross-asset nos labels.
+    O retorno_pts precisa ser calculado dentro do mesmo ativo.
+    """
     if tp_pts is None:
         tp_pts = _CFG['trading'].get('tp_pts', 100)
     if sl_pts is None:
@@ -233,6 +238,7 @@ def processar_jsonl(input_path, output_path, ativo_filter=None,
         max_holding_s = _CFG['trading'].get('max_holding_s') or 30
     print(f'Lendo {input_path}...')
 
+    # v11.3: Carrega tudo, depois processa por ativo
     precos, ts_list, ativos_list, vol_list = [], [], [], []
 
     with open(input_path, 'r', encoding='utf-8') as f:
@@ -275,12 +281,37 @@ def processar_jsonl(input_path, output_path, ativo_filter=None,
     ativos_arr = ativos_arr[idx_sort]
     vol_arr = vol_arr[idx_sort]
 
-    print(f'Processando {len(precos_arr):,} registros (tp={tp_pts}, sl={sl_pts}, holding={max_holding_s}s)...')
-
-    resultado = label_vectorizado(
-        precos_arr, ts_arr, ativos_arr,
-        tp_pts=tp_pts, sl_pts=sl_pts,
-        max_holding_s=max_holding_s, purge_s=purge_s,
+    # v11.3: Processa cada ativo SEPARADAMENTE
+    # Sem isso, WIN e WDO interleavados por timestamp criam
+    # micro-segmentos que contaminam o retorno_pts cross-asset
+    ativos_unicos = sorted(set(ativos_arr))
+    if len(ativos_unicos) > 1 and ativo_filter is None:
+        print(f'v11.3: {len(ativos_unicos)} ativos detectados ({ativos_unicos}). ')
+        print(f'  Processando cada ativo separadamente para evitar contaminação...')
+        resultados = []
+        for ativo in ativos_unicos:
+            mask = ativos_arr == ativo
+            print(f'  {ativo}: {mask.sum():,} registros')
+            res = label_vectorizado(
+                precos_arr[mask], ts_arr[mask], ativos_arr[mask],
+                tp_pts=tp_pts, sl_pts=sl_pts,
+                max_holding_s=max_holding_s, purge_s=purge_s,
+                min_vol=min_vol, tick_ms=100)
+            resultados.append(res)
+        # Concatena resultados
+        resultado = {}
+        for key in resultados[0]:
+            resultado[key] = np.concatenate([r[key] for r in resultados])
+        # Re-sort por ts_ms
+        idx_final = np.argsort(resultado['ts_ms'], kind='mergesort')
+        for key in resultado:
+            resultado[key] = resultado[key][idx_final]
+    else:
+        print(f'Processando {len(precos_arr):,} registros (tp={tp_pts}, sl={sl_pts}, holding={max_holding_s}s)...')
+        resultado = label_vectorizado(
+            precos_arr, ts_arr, ativos_arr,
+            tp_pts=tp_pts, sl_pts=sl_pts,
+            max_holding_s=max_holding_s, purge_s=purge_s,
         min_vol=(None if min_vol is None else vol_arr),
     )
 
