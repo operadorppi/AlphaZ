@@ -219,7 +219,22 @@ class Watchdog:
             except Exception:
                 log.error(f"Falha ao matar motor PID={pid}")
 
+        self._consolidar_parquets()
         self._fechar_log()
+
+    def _consolidar_parquets(self):
+        """Consolida arquivos .part_*.parquet em arquivos únicos por hora."""
+        try:
+            from adapters.rtd_writer import consolidar_book_parquet, consolidar_tt_parquet
+            from datetime import date
+            pasta = os.path.join(self._script_dir, 'D:\\MarketData\\Profit')
+            dia_str = date.today().strftime('%Y%m%d')
+            log.info(f'[WD] Consolidando Parquets do dia {dia_str}...')
+            n_book = consolidar_book_parquet(pasta, dia_str)
+            n_tt = consolidar_tt_parquet(pasta, dia_str)
+            log.info(f'[WD] Consolidados: {n_book} book + {n_tt} TT')
+        except Exception as e:
+            log.warning(f'[WD] Falha na consolidacao: {e}')
 
     def _fechar_log(self):
         if hasattr(self, '_log_stdout') and self._log_stdout:
@@ -346,6 +361,13 @@ class Watchdog:
                         f"Reinicios (1h): {len(self.reinicios)}"
                     )
                     tempo_ultimo_log = time.time()
+                
+                # v11.18: Consolidacao periodica (a cada 1h)
+                if not hasattr(self, '_ultimo_consolidar'):
+                    self._ultimo_consolidar = time.time()
+                if time.time() - self._ultimo_consolidar >= 3600:
+                    self._consolidar_parquets()
+                    self._ultimo_consolidar = time.time()
 
             except KeyboardInterrupt:
                 break
