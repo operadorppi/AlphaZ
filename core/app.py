@@ -286,11 +286,18 @@ class App:
                 trade.aggressor, trade.buyer, trade.seller
             )])
 
-            # 3. Calcular features (Lógica)
+            # 3. Alimentar Scorer ML PRIMEIRO (Inferência precisa rodar
+            #    ANTES do signal engine para que self.scorer.prob tenha
+            #    a probabilidade do evento ATUAL, não do anterior).
+            if self.scorer:
+                self.scorer.evento(trade.symbol, trade.timestamp_ms, trade.price, 
+                                  trade.quantity, trade.aggressor, trade.buyer, trade.seller)
+
+            # 4. Calcular features + sinal (Lógica)
             seg = trade.timestamp_ms // 1000
             sig: Signal = self.signal.calcular(seg, skip_avaliar=False)
             
-            # 4. Acoplamento com PositionManager (Execução)
+            # 5. Acoplamento com PositionManager (Execução)
             if sig and trade.symbol == self.ativo_principal:
                 # v10.15: Utiliza o objeto Signal tipado
                 self.position.confianca_ewma = sig.confianca
@@ -340,11 +347,6 @@ class App:
                         model_version=self.config.get('ml_modelo', '').split('\\')[-1] if self.config.get('ml_modelo') else '',
                     )
                     self.journal.registrar(entry)
-
-            # 4. Alimentar Scorer ML (Inferência)
-            if self.scorer:
-                self.scorer.evento(trade.symbol, trade.timestamp_ms, trade.price, 
-                                  trade.quantity, trade.aggressor, trade.buyer, trade.seller)
 
         elif event.type == 'BOOK':
             snapshot: BookSnapshot = event.payload

@@ -1,3 +1,40 @@
+## v11.9 — ScorerML Integrado ao Motor ao Vivo (29/08/2026)
+
+### Problema
+
+O ScorerML existia mas tinha 2 bugs que impediam o funcionamento:
+
+1. **Ordem de execução invertida**: `signal.calcular()` era chamado ANTES de `scorer.evento()`. O signal engine lia `self.scorer.prob` que ainda tinha a probabilidade do evento ANTERIOR (ou vazio no primeiro evento). O ML era sempre 1 evento atrasado.
+
+2. **Sem feedback loop**: o scorer não atualizava o `signal.scorer` após carregar.
+
+### Correção (core/app.py)
+
+```
+ANTES (bug):
+  1. market_state.alimentar_negocio(trade)
+  2. signal.calcular(seg)     ← lê prob ANTIGA
+  3. scorer.evento(...)       ← gera prob NOVA (tarde demais!)
+
+DEPOIS (correto):
+  1. market_state.alimentar_negocio(trade)
+  2. scorer.evento(...)       ← gera prob NOVA
+  3. signal.calcular(seg)     ← lê prob ATUAL ✅
+```
+
+### Validacao
+
+| Teste | Resultado |
+|-------|-----------|
+| Modelo LightGBM 17 features | ✅ Carrega |
+| Flatten produces all 17 features | ✅ 17/17 |
+| ScorerML.evento() gera prob | ✅ prob={WINV26: 0.051, WDOU26: 0.013} |
+| SignalEngine.avaliar() tem ML gate | ✅ |
+| /api/ml_health endpoint | ✅ |
+| Syntax check | ✅ |
+
+---
+
 ## v11.8 — Reorganização ml/ (29/08/2026)
 
 ### Problema
