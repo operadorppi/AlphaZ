@@ -1,3 +1,29 @@
+## v11.5 — Target Ternário com Custo (29/08/2026)
+
+### Problema
+
+Target binário (TP vs no-TP) com 0.7% de positivos fazia o modelo aprender a probabilidade base e nunca gerar trades. AUC 0.84 era decorativa.
+
+### Solução
+
+Target ternário com custo de execução:
+```
++1: retorno > custo (trade lucrativo)
+-1: retorno < -custo (trade prejudicial)
+ 0: dentro da banda (neutro — não deveria operar)
+```
+
+Walk-forward treina 2 modelos binários:
+- **Modelo LUCRO**: vai ganhar > custo?
+- **Modelo PERDA**: vai perder > custo?
+- **Score combinado**: prob_lucro - prob_perda
+
+### 2.4: Purge/embargo verificado
+
+O labeler já respeita fronteiras de dia via `_segmentos()`. O purge/embargo no walk-forward (30s) é suficiente. Dataset_builder não precisa de mudanças.
+
+---
+
 ## v11.4 — Walk-forward: Métricas de Qualidade (29/08/2026)
 
 ### Problema
