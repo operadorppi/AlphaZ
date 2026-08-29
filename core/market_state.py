@@ -27,7 +27,7 @@ from core.utils import fnum, fint, sstr
 
 from features import (
     PercentilTracker, RangeTracker, AccumulationTracker,
-    OFITracker, BookLevelFeatures, CrossAssetEngine, PadroesMemoria,
+    OFITracker, BookLevelFeatures, CrossAssetEngine, CrossAssetManager, PadroesMemoria,
     InstitutionalContext, classificar_corretora,
 )
 
@@ -125,10 +125,24 @@ class MarketState:
             }
         self.trackers = defaultdict(trackers_factory)
         
-        self.cross_engine = CrossAssetEngine(
-            ativo_principal=self.config.get('ativo_principal', 'WINV26'),
-            ativo_contexto=self.config.get('ativo_contexto', 'WDOU26'),
-        )
+        # v11.0: CrossAssetManager para múltiplos pares
+        cross_pairs = self.config.get('cross_asset_pairs', [])
+        if cross_pairs:
+            self.cross_manager = CrossAssetManager(
+                pairs=cross_pairs,
+                janela_corr=60,
+                max_lag_ms=2000,
+            )
+        else:
+            # Fallback: par principal × contexto (compatibilidade)
+            self.cross_manager = CrossAssetManager(
+                pairs=[[
+                    self.config.get('ativo_principal', 'WINV26'),
+                    self.config.get('ativo_contexto', 'WDOU26'),
+                ]],
+            )
+        # Manter referência para compatibilidade
+        self.cross_engine = self.cross_manager
 
         # Padroes (spoof, stop-hunt)
         self.padroes = padroes or PadroesMemoria(self.base_dir, config=self.config)
@@ -298,8 +312,8 @@ class MarketState:
             st['p0'] = preco
         st['p1'] = preco
 
-        # Cross-asset
-        self.cross_engine.registrar(
+        # Cross-asset (v11.0: CrossAssetManager)
+        self.cross_manager.registrar(
             ativo, tms, preco,
             1.0 if agr == 'Comprador' else (-1.0 if agr == 'Vendedor' else 0.0))
 
@@ -467,9 +481,8 @@ class MarketState:
             result = {}
             for ativo, bs in self.book_stats.items():
                 bl = bs.get('book_level')
-                ca_data = {}
-                if ativo == self.config.get('ativo_principal', 'WINV26'):
-                    ca_data = self.cross_engine.calcular()
+                # v11.0: CrossAssetManager retorna dados por par
+                ca_data = self.cross_manager.calcular_para_ativo(ativo)
                 result[ativo] = {
                     'book_level': bl or {},
                     'cross_asset': ca_data,

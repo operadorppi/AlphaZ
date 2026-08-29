@@ -124,9 +124,24 @@ def load_config(config_json: Optional[Dict[str, Any]] = None) -> ConfigCompleto:
     _apply_env_overrides(cfg)
 
     # Derived fields
-    cfg.ativos = cfg.ativos or ['WINV26', 'WDOU26']
+    cfg.ativos = cfg.ativos or ['WINV26', 'INDV26', 'WDOU26', 'DOLU26']
     cfg.ativo_principal = cfg.ativo_principal or cfg.ativos[0]
     cfg.ativo_contexto = cfg.ativo_contexto or (cfg.ativos[1] if len(cfg.ativos) > 1 else '')
+    
+    # v11.0: cross_asset_pairs (pares para análise cruzada)
+    if not hasattr(cfg, 'cross_asset_pairs') or not cfg.cross_asset_pairs:
+        # Default: WIN↔IND e DOL↔WDO
+        if len(cfg.ativos) >= 4:
+            cfg.cross_asset_pairs = [
+                [cfg.ativos[0], cfg.ativos[1]],  # WIN↔IND
+                [cfg.ativos[2], cfg.ativos[3]],  # WDO↔DOL
+            ]
+        elif len(cfg.ativos) >= 2:
+            cfg.cross_asset_pairs = [
+                [cfg.ativos[0], cfg.ativos[1]],  # principal↔contexto
+            ]
+        else:
+            cfg.cross_asset_pairs = []
 
     # Validate critical values
     _validate_config(cfg)
@@ -212,6 +227,7 @@ def _config_to_dict(cfg: ConfigCompleto) -> Dict[str, Any]:
         'normalizar_score': cfg.normalizar_score,
         'faixas_preco': cfg.faixas_preco,
         'cooldown_entre_trades_s': cfg.cooldown_entre_trades_s,
+        'cross_asset_pairs': getattr(cfg, 'cross_asset_pairs', []),
     }
 
 

@@ -9,7 +9,15 @@
     },
     "ativos": [
         "WINV26",
-        "WDOU26"
+        "INDV26",
+        "WDOU26",
+        "DOLU26"
+    ],
+    "ativo_principal": "WINV26",
+    "ativo_contexto": "WDOU26",
+    "cross_asset_pairs": [
+        ["WINV26", "INDV26"],
+        ["WDOU26", "DOLU26"]
     ],
     "rtd": {
         "book_linhas": 500,
@@ -25,7 +33,9 @@
         "max_drawdown_dia": -300,
         "custo_execucao": {
             "WIN": 5.0,
-            "WDO": 1.0
+            "WDO": 1.0,
+            "IND": 5.0,
+            "DOL": 1.0
         }
     },
     "circuit_breaker": {

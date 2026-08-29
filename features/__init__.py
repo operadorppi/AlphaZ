@@ -20,7 +20,7 @@ from .volume_profile import VolumeProfileTracker
 from .ewma_zscore import EWMAZScore
 from .kyle_lambda import KyleLambdaTracker
 from .patterns import PadroesMemoria
-from .cross_asset import CrossAssetEngine
+from .cross_asset import CrossAssetEngine, CrossAssetManager
 from .percentil import PercentilTracker, RangeTracker, AccumulationTracker
 from .institutional_context import InstitutionalContext
 
@@ -34,7 +34,7 @@ __all__ = [
     'VPINTracker', 'OFITracker', 'BookLevelFeatures',
     'JanelaFeatures', 'GeradorJanelas',
     'VolumeProfileTracker', 'EWMAZScore', 'KyleLambdaTracker',
-    'PadroesMemoria', 'CrossAssetEngine',
+    'PadroesMemoria',    'CrossAssetEngine', 'CrossAssetManager',
     'PercentilTracker', 'RangeTracker', 'AccumulationTracker',
     'InstitutionalContext',
 ]

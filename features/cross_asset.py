@@ -1,13 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-features/cross_asset.py — CrossAssetEngine (WIN × WDO).
+features/cross_asset.py — CrossAssetEngine + CrossAssetManager.
 
-Detecta liderança temporal WDO -> WIN, correlação rolling,
-divergência de fluxo, e resposta do WIN ao movimento do WDO.
+Detecta liderança temporal entre pares de ativos, correlação rolling,
+divergência de fluxo, e resposta entre ativos.
+
+v11.0: CrossAssetManager suporta múltiplos pares (WIN↔IND, DOL↔WDO).
 """
 
 import bisect
-from collections import deque
+from collections import deque, defaultdict
 
 
 def _tod_ms():
@@ -17,8 +19,8 @@ def _tod_ms():
 
 
 class CrossAssetEngine:
-    """Detecta liderança temporal WDO -> WIN, correlação rolling,
-    divergência de fluxo, e resposta do WIN ao movimento do WDO."""
+    """Detecta liderança temporal entre dois ativos, correlação rolling,
+    divergência de fluxo, e resposta de um ao movimento do outro."""
 
     def __init__(self, janela_corr=60, max_lag_ms=2000,
                  ativo_principal=None, ativo_contexto=None):
@@ -213,3 +215,82 @@ class CrossAssetEngine:
             return min(1.0, win_delta / max(abs(wdo_delta), 1))
         else:
             return min(1.0, -win_delta / max(abs(wdo_delta), 1))
+
+
+class CrossAssetManager:
+    """Gerencia múltiplos pares de CrossAssetEngine.
+
+    Exemplo:
+        pairs = [["WINV26", "INDV26"], ["WDOU26", "DOLU26"]]
+        manager = CrossAssetManager(pairs)
+
+        # Ao receber um trade:
+        manager.registrar("WINV26", ts_ms, preco, aggr_imb)
+
+        # Ao calcular features:
+        dados = manager.calcular()
+        # dados = {
+        #     'WINV26_INDV26': {...},
+        #     'WDOU26_DOLU26': {...},
+        # }
+    """
+
+    def __init__(self, pairs=None, janela_corr=60, max_lag_ms=2000):
+        self.pairs = pairs or []
+        self.engines = {}
+        self._asset_to_pairs = defaultdict(list)
+
+        for pair in self.pairs:
+            if len(pair) != 2:
+                continue
+            principal, contexto = pair[0], pair[1]
+            chave = f"{principal}_{contexto}"
+            self.engines[chave] = CrossAssetEngine(
+                ativo_principal=principal,
+                ativo_contexto=contexto,
+                janela_corr=janela_corr,
+                max_lag_ms=max_lag_ms,
+            )
+            self._asset_to_pairs[principal].append(chave)
+            self._asset_to_pairs[contexto].append(chave)
+
+    def registrar(self, ativo, ts_ms, preco, aggr_imb, imb_book=0.0):
+        """Registra um trade em todos os pares que contêm este ativo."""
+        for chave in self._asset_to_pairs.get(ativo, []):
+            self.engines[chave].registrar(ativo, ts_ms, preco, aggr_imb, imb_book)
+
+    def calcular(self):
+        """Calcula features para todos os pares."""
+        result = {}
+        for chave, engine in self.engines.items():
+            result[chave] = engine.calcular()
+        return result
+
+    def calcular_para_ativo(self, ativo):
+        """Calcula features cross-asset para um ativo específico."""
+        for chave in self._asset_to_pairs.get(ativo, []):
+            engine = self.engines[chave]
+            if engine.ativo_principal == ativo:
+                return engine.calcular()
+        for chave in self._asset_to_pairs.get(ativo, []):
+            return self.engines[chave].calcular()
+        return {}
+
+    def get_pairs(self):
+        """Retorna a lista de pares configurados."""
+        return list(self.engines.keys())
+
+    def get_summary(self):
+        """Retorna resumo de todos os pares para monitoramento."""
+        summary = {}
+        for chave, engine in self.engines.items():
+            dados = engine.calcular()
+            summary[chave] = {
+                'principal': engine.ativo_principal,
+                'contexto': engine.ativo_contexto,
+                'hist_win': len(engine.hist_win),
+                'hist_wdo': len(engine.hist_wdo),
+                'lag_ms': dados.get('lag_ms', 0),
+                'corr_aggr': dados.get('corr_aggr', 0.0),
+            }
+        return summary
