@@ -1,3 +1,42 @@
+## v11.7 — ML como Filtro Primário (29/08/2026)
+
+### Problema
+
+O ML scorer era "decorativo" — heurística sempre gerava sinal, ML era blend pós-hoc (60/40) que nunca bloqueava trade. Bug adicional: `sinal` era usado antes de ser definido no bloco ML (ReferenceError silencioso).
+
+### Nova Arquitetura: ML Gate → Heurística Confirma
+
+```
+ANTES (decorativo):
+  heuristica → score → sinal → ML ajusta 60/40 → Signal
+  (ML nunca bloqueia, nunca gera sinal sozinho)
+
+DEPOIS (filtro primario):
+  ML gate (threshold calibrado por regime)
+    → bloqueia? sinal = 0, fim.
+    → passa? heuristica confirma direcao
+      → concordam? sinal forte (score * 1.5)
+      → ML domina? sinal com desconto (score * 0.8)
+      → discordam + heur fraca? nao trade
+  fallback: sem ML, heuristica pura (modo legado)
+```
+
+### Fixes
+
+1. **Bug `sinal` indefinido** — removido referencia a `sinal` antes de definicao
+2. **Import faltante** — adicionado `from core.decision_journal import DecisionEntry`
+3. **ML gate** — `ml_gate_pass` decide se ha edge antes de gerar sinal
+4. **Concordancia ML+heur** — sinal so gera se ML e heur concordam na direcao
+5. **Fallback seguro** — sem scorer, heuristica pura (zero regressao)
+
+### Arquivos
+
+| Arquivo | Mudanca |
+|---------|---------|
+| `core/signal_engine.py` | Reestruturado avaliar(), +import DecisionEntry |
+
+---
+
 ## v11.6 — Fix PF Fake: TN não é Lucro (29/08/2026)
 
 ### Bug

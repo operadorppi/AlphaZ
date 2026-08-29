@@ -27,6 +27,7 @@ from features.feature_registry import REGISTRY
 from core.calibration import create_calibration_system
 from dataclasses import asdict
 from core.contracts import Signal
+from core.decision_journal import DecisionEntry
 from features.feature_engine import FeatureEngine
 
 log = logging.getLogger(__name__)
@@ -246,8 +247,16 @@ class SignalEngine:
         score, regime = result[0], result[1]
         estrategia = result[2] if len(result) > 2 else {}
 
-        # ML Score + Calibration (Fase 11)
+        # ============================================================
+        # ML como FILTRO PRIMÁRIO (Fase 11 v2)
+        # Fluxo: ML gate → heurística confirma → sinal combinado
+        # Se ML não está disponível, fallback para heurística pura.
+        # ============================================================
         ml_prob = 0.5
+        ml_available = False
+        ml_gate_pass = True  # Se ML não disponível, gate passa (fallback)
+        ml_decision = None
+        
         if hasattr(self, 'scorer') and self.scorer:
             try:
                 prob_dict = getattr(self.scorer, 'prob', {})
@@ -255,38 +264,63 @@ class SignalEngine:
                     val = prob_dict[ativo]
                     if isinstance(val, (int, float)) and not math.isnan(val):
                         ml_prob = float(val)
-                        
-                        # Separar MODEL PROBABILITY de TRADING DECISION
+                        ml_available = True
                         regime_str = f.get('regime', 'lateral')
-                        decision = self.calibration.calibration.separate(
+                        
+                        # Decisão calibrada: probabilidade → direção + threshold
+                        ml_decision = self.calibration.calibration.separate(
                             ml_prob=ml_prob,
                             regime=regime_str,
                             confianca=self.confianca_ewma,
                             score_heuristico=score,
                         )
                         
-                        # Usar probabilidade calibrada para scoring
-                        calibrated_prob = decision['model_probability']
-                        ml_score = (calibrated_prob - 0.5) * 2
-                        score = 0.6 * score + 0.4 * ml_score * 3.0
-                        motivos.append(f'ML={calibrated_prob:.2f}(cal)')
+                        calibrated = ml_decision['model_probability']
+                        ml_dir_str = ml_decision['trading_decision']  # 'C', 'V' ou ''
+                        threshold = ml_decision.get('threshold', 0.5)
                         
-                        # Se ML e heurística discordam, reduzir confiança
-                        if decision['trading_decision'] and sinal != 0:
-                            ml_dir = 1 if decision['trading_decision'] == 'C' else -1
-                            if ml_dir != sinal:
-                                score *= 0.7  # Penalidade por discordância
-                                motivos.append('ML_DISCORDA')
+                        # --- GATE: ML decide se há edge ---
+                        if not ml_dir_str:
+                            # Zona de incerteza → não trade
+                            ml_gate_pass = False
+                            motivos.append(f'ML_GATE_BLOCK (p={calibrated:.3f}, th={threshold:.3f})')
+                        else:
+                            motivos.append(f'ML={calibrated:.2f}(th={threshold:.3f})')
             except Exception as e:
-                log.warning(f"[SIGNAL] Erro ao acessar prob do scorer: {e}")
+                log.warning(f"[SIGNAL] Erro ML scorer: {e}")
 
-        # Sinal
+        # --- Sinal: ML gate + heurística confirmam ---
         sinal = 0
-        if score > 0.5:
-            sinal = lado
+        lado_heur = lado  # direção da heurística (aggr_imb)
+        
+        if ml_available and ml_decision:
+            ml_dir = 1 if ml_decision['trading_decision'] == 'C' else (
+                -1 if ml_decision['trading_decision'] == 'V' else 0)
+            
+            if ml_gate_pass:
+                # ML diz que há edge — heurística precisa confirmar direção
+                if lado_heur == ml_dir:
+                    # Concordância: ML + heurística → sinal forte
+                    sinal = ml_dir
+                    score = abs(score) * 1.5  # amplifica por concordância
+                    motivos.append('ML_HEUR_CONCORDAM')
+                elif score > 0.3:
+                    # Heurística fraca, mas ML forte → permite (com desconto)
+                    sinal = ml_dir
+                    score = abs(score) * 0.8
+                    motivos.append(f'ML_DOMINA (heur={score:.2f})')
+                else:
+                    # Heurística fraca E discorda → não trade
+                    motivos.append(f'HEUR_FRACA_DISCORDA (h={score:.2f})')
+            else:
+                # ML bloqueou — heurística sozinha NÃO gera sinal
+                motivos.append('ML_BLOQUEOU')
         else:
-            if sinal == 0:
-                motivos = ['fluxo fraco']
+            # Fallback: sem ML, heurística pura (modo legado)
+            if score > 0.5:
+                sinal = lado_heur
+            else:
+                motivos.append('fluxo fraco')
 
         # Persistência do sinal
         if sinal != 0 and sinal == self._sinal_anterior_bruto:
