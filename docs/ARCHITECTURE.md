@@ -129,7 +129,7 @@ ml/features_contexto_avancado.py ← VWAP, POC, compostos batch
 | Camada | Diretório | Arquivos | Linhas | Responsabilidade |
 |--------|-----------|----------|--------|------------------|
 | **core/** | `core/` | 13 | 2.800+ | Domínio: estado, scoring, posição, risco, regime, aprendizado, persistência, métricas, **loop RTD completo**, orquestrador, **capture daemon** |
-| **features/** | `features/` | 17 | 1.876 | Microestrutura: VPIN, OFI, book, T&T, VP, Kyle, vol, retornos, contexto, sessão, cross-asset, padrões |
+| **features/** | `features/` | 17 | 2.000+ | Microestrutura: VPIN, OFI, book, T&T, VP, Kyle, vol, retornos, contexto, sessão, **cross-asset multi-par**, padrões |
 | **config/** | `config/` | 2 | 200 | Configuração: ConfigCompleto, flat/aninhado, defaults |
 | **adapters/** | `adapters/` | 6 | 700+ | I/O: RTD (COM), file storage (JSONL), dashboard HTTP, COM watchdog, **dashboard/ (api+state+handlers)** |
 | **ml/** | `ml/` | 29 | ~8.000 | Pipeline: labeler, dataset, treino, walk-forward, ablation, features batch |
@@ -197,7 +197,7 @@ C:/Freebuff/
 │   ├── ewma_zscore.py          # EWMAZScore
 │   ├── kyle_lambda.py          # KyleLambdaTracker
 │   ├── patterns.py             # PadroesMemoria (spoof, stop-hunt)
-│   ├── cross_asset.py          # CrossAssetEngine (WIN×WDO)
+│   ├── cross_asset.py          # CrossAssetEngine + CrossAssetManager (WIN↔IND, DOL↔WDO)
 │   ├── percentil.py            # PercentilTracker + RangeTracker + AccumulationTracker
 │   ├── volatility.py           # VolatilityTracker
 │   ├── returns.py              # ReturnsTracker

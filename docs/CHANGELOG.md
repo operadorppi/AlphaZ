@@ -1,3 +1,45 @@
+## v11.1 — 4 Ativos Simultâneos + CrossAssetManager (29/08/2026)
+
+### Expansão de 2 para 4 ativos
+
+**config.json:**
+```json
+"ativos": ["WINV26", "INDV26", "WDOU26", "DOLU26"]
+"cross_asset_pairs": [["WINV26", "INDV26"], ["WDOU26", "DOLU26"]]
+```
+
+### CrossAssetManager (novo)
+
+**Problema:** `CrossAssetEngine` suportava apenas 1 par (WIN×WDO). Impossível analisar WIN↔IND e DOL↔WDO simultaneamente.
+
+**Solução:** `CrossAssetManager` gerencia múltiplos pares de `CrossAssetEngine`:
+
+```python
+manager = CrossAssetManager(pairs=[["WINV26", "INDV26"], ["WDOU26", "DOLU26"]])
+
+# Ao receber trade:
+manager.registrar("WINV26", ts_ms, preco, aggr_imb)
+
+# Features por par:
+dados = manager.calcular()
+# {'WINV26_INDV26': {lag, corr, divergencia, ...},
+#  'WDOU26_DOLU26': {lag, corr, divergencia, ...}}
+
+# Features para um ativo:
+dados_win = manager.calcular_para_ativo("WINV26")
+```
+
+**Features por par:** lag_ms, corr_aggr, corr_imb_book, divergencia, leading_score, resposta, delta.
+
+**Mudanças:**
+- `config.json`: +2 ativos, +cross_asset_pairs, +custos IND/DOL
+- `features/cross_asset.py`: +CrossAssetManager (novo)
+- `features/__init__.py`: exporta CrossAssetManager
+- `core/market_state.py`: usa CrossAssetManager em vez de engine única
+- `config/__init__.py`: gera cross_asset_pairs default
+
+---
+
 ## v11.0 — CaptureDaemon + Desacoplamento RTD (29/08/2026)
 
 ### CaptureDaemon — Captura Bruta Imortal

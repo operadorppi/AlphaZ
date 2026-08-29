@@ -215,10 +215,19 @@
 |--------|-----------|
 | `PadroesMemoria` | Spoof, stop-hunt, absorção, perfil horário, persistência entre sessões |
 
-### features/cross_asset.py (215 linhas) — WIN×WDO
+### features/cross_asset.py (~320 linhas) — Cross-Asset (v11.1)
 | Classe | Descrição |
 |--------|-----------|
-| `CrossAssetEngine` | Liderança temporal WDO→WIN, correlação rolling, divergência de fluxo |
+| `CrossAssetEngine` | Liderança temporal entre 2 ativos, correlação rolling, divergência de fluxo |
+| `CrossAssetManager` | Gerencia múltiplos pares de CrossAssetEngine (WIN↔IND, DOL↔WDO) |
+
+**CrossAssetManager:**
+- `__init__(pairs)` — Inicializa com lista de pares `[["WIN", "IND"], ["WDO", "DOL"]]`
+- `registrar(ativo, ts_ms, preco, aggr_imb)` — Registra trade em todos os pares do ativo
+- `calcular()` — Retorna features por par: `{lag_ms, corr_aggr, divergencia, ...}`
+- `calcular_para_ativo(ativo)` — Features cross de um ativo específico
+- `get_pairs()` — Lista de pares configurados
+- `get_summary()` — Resumo para monitoramento
 
 ### features/percentil.py (199 linhas) — Percentis + Range + Acumulação
 | Classe | Descrição |
