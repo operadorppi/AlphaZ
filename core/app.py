@@ -31,6 +31,8 @@ import logging
 import threading
 import importlib
 import importlib.util
+import json
+from pathlib import Path
 from collections import defaultdict
 from datetime import datetime, date
 
@@ -142,7 +144,37 @@ class App:
 
         self.latencia_atual_ms = 0.0
         self.eventos_processados = 0
+
+        # v12.0: Replay gate — verificar se replay foi validado
+        self._replay_aprovado = self._verificar_replay_gate()
+
         log.info(f"[APP] Inicializado: {self.ativo_principal} × {self.ativo_contexto}")
+
+    def _verificar_replay_gate(self):
+        """Verifica se o replay de validacao foi aprovado.
+        Retorna True se aprovado ou se gate nao e obrigatorio."""
+        exigir = self.config.get('exigir_replay_validado', False)
+        if not exigir:
+            return True
+        resultado_path = Path(self.save_dir) / 'replay_resultado.json'
+        if not resultado_path.exists():
+            log.warning('[REPLAY-GATE] replay_resultado.json nao encontrado — motor bloqueado')
+            return False
+        try:
+            with open(resultado_path, encoding='utf-8') as f:
+                resultado = json.load(f)
+            aprovado = resultado.get('aprovado', False)
+            if aprovado:
+                log.info(f'[REPLAY-GATE] APROVADO — PF={resultado.get("pf_medio", 0):.2f}, '
+                         f'WR={resultado.get("wr_medio", 0):.1%}, '
+                         f'DD={resultado.get("dd_dia_medio", 0):.0f}')
+            else:
+                log.warning(f'[REPLAY-GATE] REPROVADO — motor bloqueado')
+                log.warning(f'  Rodar: python replay_engine.py --modo validacao --dias 3')
+            return aprovado
+        except Exception as e:
+            log.warning(f'[REPLAY-GATE] Erro ao ler resultado: {e}')
+            return False
 
     def _carregar_scorer(self):
         modelo_path = self.config.get('ml_modelo', '')

@@ -65,7 +65,8 @@ class FeatureEngine:
         }
 
         # Aceleração
-        hist_ant = self.state.historico.get(ativo, [])
+        # v12.0: converter deque para list (Python 3.14 removeu deque slicing)
+        hist_ant = list(self.state.historico.get(ativo, []))
         if len(hist_ant) >= 3:
             aggr_hist = np.array([h['aggr_imb'] for h in hist_ant[-6:]], dtype=np.float32)
             rec = aggr_hist[-3:].mean()

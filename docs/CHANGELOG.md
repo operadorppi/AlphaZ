@@ -1,3 +1,26 @@
+## v12.0 — Replay Engine com Validacao Multi-Dia (29/08/2026)
+
+### Replay multi-dia
+
+Modo `--modo validacao --dias 3`: replay de N dias consecutivos com verdicto go/no-go.
+
+### Gate de vida (Fase 4)
+
+Cada dia deve passar: PF >= 1.2, win rate >= 45%, max drawdown/dia <= 200 pts.
+Todos os dias devem passar para GO.
+
+### Bugs fixados
+
+- `calcular()` nao retornava sinal (return None)
+- `self.calibration.calibration.separate()` → `self.calibration.separate()`
+- `deque[-60:]` quebrado no Python 3.14 — `list()` antes de fatiar
+- Cooldown em replay usava wall clock — agora usa timestamp simulado
+- Batch mode: recalcula features so quando o segundo muda (268K ev em 25s)
+
+### Resultado validacao 3 dias: NO-GO (dia 27 reprovado)
+
+---
+
 ## v11.21 — Target de Regressão + Purge/Embargo no Dataset Builder (30/08/2026)
 
 ### 1. Target de Regressão (ml/retreinar_otimizado.py)

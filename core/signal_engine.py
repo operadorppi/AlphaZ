@@ -78,15 +78,23 @@ class SignalEngine:
 
     def calcular(self, seg, skip_avaliar=False):
         """Calcula features do segundo para todos os ativos no buffer.
-        Otimização: recalcula apenas se houver trades novos desde o último cálculo.
+        Otimizacao: recalcula apenas se houver trades novos desde o ultimo calculo.
+        Em batch mode (_batch_mode=True), so recalcula quando o segundo muda.
         """
         for ativo, negs in list(self.state.buffer.items()):
             n_negs = len(negs)
-            # Pula se já calculou este seg com a mesma quantidade de negócios
-            cache_key = (ativo, seg, n_negs)
-            if self._last_seg_calc.get(ativo) == cache_key:
-                continue
-            self._last_seg_calc[ativo] = cache_key
+            if getattr(self, '_batch_mode', False):
+                # Batch: so recalcula quando o segundo muda (nao a cada trade)
+                last = self._last_seg_calc.get(ativo)
+                if last and last[1] == seg:
+                    continue
+                self._last_seg_calc[ativo] = (ativo, seg, n_negs)
+            else:
+                # Real-time: recalcula a cada trade novo
+                cache_key = (ativo, seg, n_negs)
+                if self._last_seg_calc.get(ativo) == cache_key:
+                    continue
+                self._last_seg_calc[ativo] = cache_key
 
             f = self.feature_engine.processar_lote(ativo, negs, seg)
             if not f:
@@ -152,6 +160,9 @@ class SignalEngine:
                 # Computa todas as features de contexto
                 ctx_feats = inst.compute(ativo, preco)
                 f.update(ctx_feats)
+
+        # v12.0: retorna sinal do ativo principal
+        return self.sinais.get(self.ativo_principal)
 
     def avaliar(self, ativo, f):
         """Avalia features e produz score + sinal.
@@ -268,7 +279,7 @@ class SignalEngine:
                         regime_str = f.get('regime', 'lateral')
                         
                         # Decisão calibrada: probabilidade → direção + threshold
-                        ml_decision = self.calibration.calibration.separate(
+                        ml_decision = self.calibration.separate(
                             ml_prob=ml_prob,
                             regime=regime_str,
                             confianca=self.confianca_ewma,
@@ -296,7 +307,9 @@ class SignalEngine:
         # v11.13: Peso ML vs Heurística é DINÂMICO baseado no ECE
         # ECE alto (ruim) → ML menos confiável → heurística pesa mais
         # ECE baixo (bom) → ML confiável → ML domina
-        ece = getattr(self.calibration.calibration, 'brier_score', 0.0) if hasattr(self, 'calibration') else 0.0
+        ece = 0.0
+        if hasattr(self, 'calibration') and hasattr(self.calibration, 'calibrator'):
+            ece = getattr(self.calibration.calibrator, 'brier_score', 0.0)
         ml_weight = 0.5  # default: peso igual
         if ece > 0.15:
             ml_weight = 0.3   # ECE ruim: heurística domina

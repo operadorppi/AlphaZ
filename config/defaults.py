@@ -102,6 +102,12 @@ class ConfigCompleto:
         # Position sizing
         self.target_risk_per_trade = 60
         self.max_position_size = 10
+        # Replay gate (Fase 4)
+        self.exigir_replay_validado = False  # True = motor so liga se replay aprovado
+        self.replay_min_pf = 1.2
+        self.replay_min_wr = 0.45
+        self.replay_max_dd_dia = 200.0
+        self.replay_min_dias = 3
 
 
 def _aplicar_valor_config(atual, novo):
