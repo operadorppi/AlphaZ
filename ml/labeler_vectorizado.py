@@ -246,7 +246,7 @@ def processar_jsonl(input_path, output_path, ativo_filter=None,
             if i % 1000000 == 0 and i > 0:
                 print(f'  Lidos {i:,} registros...')
             d = json.loads(line)
-            p = d.get('preco_ultimo', 0) or d.get('preco_fim', 0)
+            p = d.get('preco', 0) or d.get('preco_ultimo', 0) or d.get('preco_fim', 0)
             ativo = d.get('ativo', '')
             vol = d.get('vol_total', 0)
             if ativo_filter and ativo != ativo_filter:
