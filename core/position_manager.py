@@ -97,13 +97,17 @@ class PositionManager:
             # 4. Ainda não atingiu o limite de contratos
             mesmo_lado = (lado > 0 and pos['lado'] == 'C') or (lado < 0 and pos['lado'] == 'V')
             
+            # v11.15: Piramidação considera ml_prob E confiança heurística
+            ml_piramida = pos.get('ml_prob', 0.5)
             if mesmo_lado and abs(self.confianca_ewma) >= conf_piramide and pnl_atual >= 50 and pos['quantidade'] < max_qty:
-                qtd_add = 1
-                nova_qtd = pos['quantidade'] + qtd_add
-                # Novo preço médio
-                pos['preco_medio'] = ((pos['preco_medio'] * pos['quantidade']) + (preco * qtd_add)) / nova_qtd
-                pos['quantidade'] = nova_qtd
-                pos['motivos'].append(f"PIRAMIDE_CONF_{self.confianca_ewma:.2f}")
+                if ml_piramida >= 0.65:  # ML confirma piramidação
+                    qtd_add = 1
+                    nova_qtd = pos['quantidade'] + qtd_add
+                    pos['preco_medio'] = ((pos['preco_medio'] * pos['quantidade']) + (preco * qtd_add)) / nova_qtd
+                    pos['quantidade'] = nova_qtd
+                    pos['motivos'].append(f"PIRAMIDE_CONF_{self.confianca_ewma:.2f}_ML_{ml_piramida:.2f}")
+                else:
+                    pos['motivos'].append(f"PIRAMIDE_BLOQ_ML_{ml_piramida:.2f}")
                 
                 # Ao piramidar, subimos o stop para o breakeven do novo preço médio para garantir risco zero na adição
                 pos['stop_preco'] = pos['preco_medio']
@@ -144,16 +148,34 @@ class PositionManager:
                 })
 
             quantidade = decision.size or 1
+            ml_prob = getattr(signal, 'ml_prob', 0.5)
+            
+            # v11.15: Sizing baseado no ML score
+            # ml_prob > 0.7: alto convicção → size aumentado
+            # ml_prob > 0.6: convicção normal → size normal
+            # ml_prob < 0.55: baixa convicção → size reduzido
+            ps_config = self.config.get('position_sizing', {})
+            max_qty = ps_config.get('max_position_size', 5)
+            ml_sizing = self.config.get('ml_sizing', True)
+            
+            if ml_sizing and ml_prob > 0.7:
+                quantidade = min(quantidade + 1, max_qty)
+                motivo_ml = f'ML_ALTO ({ml_prob:.2f})'
+            elif ml_sizing and ml_prob < 0.55:
+                quantidade = max(1, quantidade - 1)
+                motivo_ml = f'ML_BAIXO ({ml_prob:.2f})'
+            else:
+                motivo_ml = f'ML_NORMAL ({ml_prob:.2f})'
 
             self.posicao = {
                 'ativo': ativo, 'lado': l, 'entrada': preco, 'preco_medio': preco,
                 'stop_preco': stop_preco, 'tp': decision.tp,
-                'aberta_em': time.time(), 'motivos': list(signal.motivos), 'contrib': list(signal.contrib),
+                'aberta_em': time.time(), 'motivos': list(signal.motivos) + [motivo_ml], 'contrib': list(signal.contrib),
                 'prev_idx': len(self.learning.previsoes) - 1 if self.learning else 0,
                 'mfe': 0.0, 'mae': 0.0, 'breakeven_ativado': False,
                 'regime_abertura': regime or 'indefinido',
                 'quantidade': quantidade,
-                'ml_prob': getattr(signal, 'ml_prob', 0.5)
+                'ml_prob': ml_prob
             }
             self.risk.trades_dia += 1
             if self.persistence:
