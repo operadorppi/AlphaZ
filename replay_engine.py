@@ -1,131 +1,213 @@
 # -*- coding: utf-8 -*-
 """
-replay_engine.py — Motor de Replay Determinístico (v10.1).
-
-Responsável por ler arquivos JSONL de captura bruta e processar cada evento
-através das camadas desacopladas do sistema. Garante que a lógica de sinais
-e execução seja idêntica ao ambiente de produção.
+replay_engine.py - Motor de Replay e Validacao de Edge (v11.17).
 
 Uso:
-  python replay_engine.py --pasta MarketData/Profit --sessao 20260828_120000
+  python replay_engine.py --modo paper --modelo D:/MarketData/mimo/26/modelo_lgbm_v5_otimizado.pkl --dia 2026-08-28
 """
 
-import json
-import os
-import sys
-import logging
-import argparse
+import json, os, sys, time, logging, argparse
 from pathlib import Path
+from datetime import datetime
+from collections import defaultdict
+import numpy as np
 
-# Configuração de Logs seguindo padrão do projeto
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s",
+                    handlers=[logging.StreamHandler(sys.stdout)])
 log = logging.getLogger("Replay")
 
-from core.contracts import Signal
-from core.market_state import MarketState
-from core.learning import Learning
-from core.regime_detector import RegimeDetector
-from core.risk_manager import RiskManager
-from core.position_manager import PositionManager
-from core.signal_engine import SignalEngine
-from features.feature_engine import FeatureEngine
-from ml.scorer import ScorerML
+
+class TradeMetrics:
+    def __init__(self, custo_execucao=5.0):
+        self.trades = []
+        self.custo_execucao = custo_execucao
+
+    def registrar(self, lado, preco_entrada, preco_saida, motivo=""):
+        pnl_bruto = (preco_saida - preco_entrada) if lado == "C" else (preco_entrada - preco_saida)
+        pnl_liq = pnl_bruto - self.custo_execucao
+        self.trades.append({"lado": lado, "entrada": preco_entrada, "saida": preco_saida,
+                            "pnl_bruto": round(pnl_bruto, 2), "pnl_liquido": round(pnl_liq, 2),
+                            "motivo": motivo, "acertou": pnl_liq > 0})
+
+    def calcular(self):
+        if not self.trades:
+            return {"n_trades": 0, "win_rate": 0, "profit_factor": 0, "expectancy_pts": 0,
+                    "total_pnl": 0, "max_drawdown": 0, "sharpe": 0, "motivos": {}, "trades": []}
+        pnls = [t["pnl_liquido"] for t in self.trades]
+        wins = [p for p in pnls if p > 0]
+        losses = [p for p in pnls if p <= 0]
+        n = len(pnls)
+        wr = len(wins) / n if n else 0
+        ganhos = sum(wins) if wins else 0
+        perdas = abs(sum(losses)) if losses else 0.01
+        pf = ganhos / perdas if perdas > 0 else float("inf")
+        eq = np.cumsum(pnls)
+        pk = np.maximum.accumulate(eq)
+        mdd = float((pk - eq).max()) if len(eq) else 0
+        sharpe = float(np.mean(pnls) / np.std(pnls)) if n > 1 and np.std(pnls) > 0 else 0
+        motivos = defaultdict(int)
+        for t in self.trades:
+            motivos[t["motivo"]] += 1
+        return {"n_trades": n, "n_wins": len(wins), "n_losses": len(losses),
+                "win_rate": round(wr, 4), "profit_factor": round(pf, 2),
+                "expectancy_pts": round(sum(pnls) / n, 2), "total_pnl": round(sum(pnls), 2),
+                "max_drawdown": round(mdd, 2), "sharpe": round(sharpe, 3),
+                "melhor_trade": round(max(pnls), 2), "pior_trade": round(min(pnls), 2),
+                "motivos": dict(motivos), "trades": self.trades}
+
+    def gate(self, pf_min=1.2, wr_min=0.45):
+        m = self.calcular()
+        pf_ok = m["profit_factor"] >= pf_min
+        wr_ok = m["win_rate"] >= wr_min
+        return {"aprovado": pf_ok and wr_ok, "pf_ok": pf_ok, "wr_ok": wr_ok,
+                "pf_atual": m["profit_factor"], "wr_atual": m["win_rate"],
+                "motivo": f"PF={m['profit_factor']:.2f}{'OK' if pf_ok else 'FAIL'} WR={m['win_rate']:.1%}{'OK' if wr_ok else 'FAIL'}"}
+
 
 class ReplayEngine:
-    """Orquestra o replay de dados brutos através das camadas do motor."""
-    
-    def __init__(self, base_dir, session_ts):
-        self.base_dir = Path(base_dir)
-        self.session_ts = session_ts
-        
-        # Inicializa camadas desacopladas
-        self.state = MarketState(base_dir=str(self.base_dir))
-        self.learning = Learning()
-        self.regime = RegimeDetector()
-        self.risk = RiskManager()
-        self.pos_manager = PositionManager(self.risk, learning=self.learning)
-        self.feature_engine = FeatureEngine(self.state)
-        
-        # Localiza modelo para o Scorer
-        modelo_path = self.base_dir / "modelos" / "modelo_final.pkl"
-        # v10.1: O Scorer agora é injetado no SignalEngine se disponível
-        self.scorer = ScorerML(str(modelo_path), ["WINV26", "WDOU26"]) if modelo_path.exists() else None
-        
-        self.signal_engine = SignalEngine(self.state, self.learning, self.regime, 
-                                          self.feature_engine, risk=self.risk)
-        if self.scorer:
-            self.signal_engine.scorer = self.scorer
+    SLIPPAGE = {"WINV26": 2.0, "WDOU26": 0.5, "INDV26": 2.0, "DOLU26": 0.5}
 
-    def run(self):
-        neg_file = self.base_dir / f"raw_negocios_ms_{self.session_ts}.jsonl"
+    def __init__(self, config=None, modelo_path=None, instrumentos=None):
+        self.config = config or {}
+        self.modelo_path = modelo_path
+        self.instrumentos = instrumentos or ["WINV26", "WDOU26"]
+        self.state = None
+        self.signal_engine = None
+        self.scorer = None
+        self.metrics = TradeMetrics(self.config.get("custo_execucao_win", 5.0))
+        self._posicao = None
+        self._cooldown_until = 0.0
+        self._events = 0
 
-        if not neg_file.exists():
-            log.error(f"Arquivo de negócios não encontrado: {neg_file}")
+    def _init_camadas(self):
+        from core.market_state import MarketState
+        from core.learning import Learning
+        from core.regime_detector import RegimeDetector
+        from core.risk_manager import RiskManager
+        from core.signal_engine import SignalEngine
+        from features.feature_engine import FeatureEngine
+        self.state = MarketState(config=self.config)
+        self.learning = Learning(config=self.config)
+        self.regime = RegimeDetector(config=self.config)
+        self.risk = RiskManager(config=self.config)
+        self.feature_engine = FeatureEngine(self.state, config=self.config)
+        self.signal_engine = SignalEngine(self.state, self.learning, self.regime,
+                                          self.feature_engine, risk=self.risk, config=self.config)
+        if self.modelo_path and os.path.exists(self.modelo_path):
+            try:
+                from ml.scorer import ScorerML
+                self.scorer = ScorerML(self.modelo_path, self.instrumentos)
+                self.signal_engine.scorer = self.scorer
+                log.info(f"[REPLAY] Scorer carregado: {self.modelo_path}")
+            except Exception as e:
+                log.warning(f"[REPLAY] Scorer nao carregou: {e}")
+
+    def replay_dia(self, pasta_neg, dia_str=None):
+        self._init_camadas()
+        neg_files = sorted(Path(pasta_neg).glob(f"raw_negocios_ms_*{dia_str}*.jsonl")) if dia_str else \
+                    sorted(Path(pasta_neg).glob("raw_negocios_ms_*.jsonl"))
+        if not neg_files:
+            log.error(f"Nenhum arquivo em {pasta_neg}")
             return
+        eventos = []
+        for nf in neg_files:
+            with open(nf, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        ev = json.loads(line)
+                        ev["_tipo"] = "NEG"
+                        eventos.append(ev)
+                    except Exception:
+                        pass
+        eventos.sort(key=lambda e: e.get("ts_ms", 0))
+        log.info(f"[REPLAY] {len(eventos)} eventos")
+        t0 = time.time()
+        for ev in eventos:
+            try:
+                if ev["_tipo"] == "NEG":
+                    self._process_neg(ev)
+                self._events += 1
+            except Exception:
+                pass
+            if self._events % 50000 == 0:
+                log.info(f"[REPLAY] {self._events:,} ev, {len(self.metrics.trades)} trades, {time.time()-t0:.1f}s")
+        self._print_resultados(time.time() - t0)
 
-        log.info(f"Iniciando Replay Determinístico: {self.session_ts}")
-        
-        # Processamento linha a linha para simular fluxo de tempo real
-        with open(neg_file, 'r', encoding='utf-8') as f:
-            for line in f:
-                try:
-                    data = json.loads(line)
-                    self._process_event(data)
-                except Exception as e:
-                    log.error(f"Erro ao processar linha: {e}")
-                    continue
-
-        log.info("Replay finalizado.")
-        self._print_stats()
-
-    def _process_event(self, event):
-        sym = event['ativo']
-        ts = event['ts_ms']
-        p = event['preco']
-        q = event['qtd']
-        agr = event['agressor']
-        comp = event.get('compradora', '')
-        vend = event.get('vendedora', '')
-
-        # 1. Alimenta MarketState (Cálculo de Features de Microestrutura)
+    def _process_neg(self, ev):
+        sym = ev.get("ativo", "")
+        ts = ev.get("ts_ms", 0)
+        p = ev.get("preco", 0)
+        q = ev.get("qtd", 0)
+        agr = ev.get("agressor", "")
+        comp = ev.get("compradora", "")
+        vend = ev.get("vendedora", "")
+        if p <= 0 or q <= 0:
+            return
         self.state.alimentar_negocio(sym, ts, p, q, agr, comp, vend)
-
-        # 2. Alimenta Scorer (ML Inference)
         if self.scorer:
             self.scorer.evento(sym, ts, p, q, agr, comp, vend)
+        sig = self.signal_engine.calcular(ts // 1000)
+        if sym == self.instrumentos[0] and sig:
+            if self._posicao:
+                self._checar_saida(sym, p, ts)
+            if not self._posicao and sig.lado:
+                self._checar_entrada(sym, sig, p, ts)
 
-        # 3. Signal Engine produz sinal (Lógica de decisão baseada em regras + ML)
-        seg = ts // 1000
-        sig: Signal = self.signal_engine.calcular(seg)
+    def _checar_entrada(self, sym, sig, preco, ts):
+        if time.time() < self._cooldown_until or sig.score < 0.5:
+            return
+        slip = self.SLIPPAGE.get(sym, 2.0)
+        pe = preco + slip if sig.lado == "C" else preco - slip
+        self._posicao = {"lado": sig.lado, "entrada": pe, "tp": getattr(sig, "tp", 100),
+                         "sl": getattr(sig, "sl", 50), "aberta_em": ts}
 
-        # 4. Position Manager avalia abertura/fechamento (Filtro de Risco)
-        if sym == "WINV26" and sig:
-            # v10.21: Obtenção de decisão de risco para paridade com loop Live
-            res_recentes = self.learning.resultados if self.learning else []
-            decision = self.risk.pode_abrir(sig, res_recentes)
+    def _checar_saida(self, sym, preco, ts):
+        pos = self._posicao
+        if not pos:
+            return
+        pnl = (preco - pos["entrada"]) if pos["lado"] == "C" else (pos["entrada"] - preco)
+        motivo = None
+        if pnl >= pos["tp"]:
+            motivo = "TP"
+        elif pnl <= -pos["sl"]:
+            motivo = "SL"
+        elif (ts - pos["aberta_em"]) > 300000:
+            motivo = "TIMEOUT"
+        if motivo:
+            slip = self.SLIPPAGE.get(sym, 2.0)
+            ps = preco - slip if pos["lado"] == "C" else preco + slip
+            self.metrics.registrar(pos["lado"], pos["entrada"], ps, motivo)
+            self._cooldown_until = time.time() + self.config.get("cooldown_entre_trades_ms", 5000) / 1000
+            self._posicao = None
 
-            res = self.pos_manager.gerenciar(
-                sym, sig, p, decision=decision,
-                regime=self.signal_engine.features.get(sym, {}).get('regime')
-            )
-            if res and res.tipo in ('ABRIR', 'FECHAR'):
-                log.info(f"[{ts}] EVENTO OPERACIONAL: {res.tipo} | PNL: {res.pnl}")
+    def _print_resultados(self, elapsed):
+        m = self.metrics.calcular()
+        g = self.metrics.gate()
+        log.info("=" * 50)
+        log.info(f"Trades: {m['n_trades']} | WR: {m['win_rate']:.1%} | PF: {m['profit_factor']:.2f}")
+        log.info(f"PnL: {m['total_pnl']:+.1f} | E(s): {m['expectancy_pts']:+.1f} | Sharpe: {m['sharpe']:.3f}")
+        log.info(f"MaxDD: {m['max_drawdown']:.1f} | Motivos: {m['motivos']}")
+        log.info(f"GATE: {g['motivo']} | APROVADO: {'SIM' if g['aprovado'] else 'NAO'}")
+        log.info("=" * 50)
+        out = {"timestamp": datetime.now().isoformat(), "metrics": m, "gate": g}
+        out_path = Path(self.config.get("save_dir", ".")) / "replay_resultado.json"
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(out, f, indent=2, default=str)
+        log.info(f"Salvo: {out_path}")
 
-    def _print_stats(self):
-        from core.metrics import Metrics
-        m = Metrics(resultados=self.pos_manager.learning.resultados if self.pos_manager.learning else [])
-        stats = m.calcular()
-        log.info(f"Estatísticas Consolidadas do Replay: {stats}")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--pasta", default="MarketData/Profit")
-    parser.add_argument("--sessao", required=True, help="Timestamp da sessão (ex: 20260808_090000)")
+    parser = argparse.ArgumentParser(description="Replay Engine v11.17")
+    parser.add_argument("--modo", choices=["paper", "validacao"], default="paper")
+    parser.add_argument("--modelo", default=None)
+    parser.add_argument("--dia", default=None)
+    parser.add_argument("--pasta", default="D:/MarketData/mimo")
+    parser.add_argument("--ativo", default="WINV26")
     args = parser.parse_args()
-
-    engine = ReplayEngine(args.pasta, args.sessao)
-    engine.run()
+    dia_str = args.dia.replace("-", "") if args.dia else None
+    engine = ReplayEngine(config={"save_dir": args.pasta, "custo_execucao_win": 5.0, "cooldown_entre_trades_ms": 5000},
+                          modelo_path=args.modelo, instrumentos=[args.ativo, "WDOU26"])
+    engine.replay_dia(pasta_neg=args.pasta, dia_str=dia_str)
