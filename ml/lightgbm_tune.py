@@ -20,7 +20,7 @@ import pandas as pd
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from treino_lib import preparar_features, avaliar_modelo, feature_importances
+from ml.treino_lib import preparar_features, avaliar_modelo, feature_importances
 
 SAVE_DIR = r'D:\MarketData\mimo'
 DATASET = os.path.join(SAVE_DIR, 'dataset_final_v2_win.parquet')

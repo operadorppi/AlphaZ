@@ -33,7 +33,7 @@ from core.risk_manager import RiskManager
 from core.position_manager import PositionManager
 from core.signal_engine import SignalEngine
 from features.feature_engine import FeatureEngine
-from scorer import ScorerML
+from ml.scorer import ScorerML
 
 class ReplayEngine:
     """Orquestra o replay de dados brutos através das camadas do motor."""

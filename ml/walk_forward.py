@@ -110,7 +110,7 @@ def main():
 
     # Prepara features (exclui colunas não-feature)
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from treino_lib import preparar_features, avaliar_modelo, feature_importances
+    from ml.treino_lib import preparar_features, avaliar_modelo, feature_importances
 
     X_cols = preparar_features(df)
     X_cols = [c for c in X_cols if c in treino.columns]
@@ -130,7 +130,7 @@ def main():
     # v9.15: one-hot de categóricas (fase_sessao etc.)
     cat_cols = [c for c in X_cols if X_train[c].dtype == object]
     if cat_cols:
-        from treino_lib import aplicar_encoding
+        from ml.treino_lib import aplicar_encoding
         n_train = len(X_train)
         combinado = pd.concat([X_train[cat_cols], X_test[cat_cols]], ignore_index=True)
         combinado = aplicar_encoding(combinado, cat_cols)

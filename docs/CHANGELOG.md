@@ -1,3 +1,44 @@
+## v11.8 — Reorganização ml/ (29/08/2026)
+
+### Problema
+
+`scorer.py`, `features_lib.py` e `treino_lib.py` estavam na raiz do projeto, misturados com arquivos de configuração e orquestração. Os 40+ arquivos de ML já estavam em `ml/`, mas os 3 módulos fundamentais ficavam de fora.
+
+### Correção
+
+| Arquivo | Antes | Depois |
+|---------|-------|--------|
+| `scorer.py` | raiz/ | `ml/scorer.py` |
+| `features_lib.py` | raiz/ | `ml/features_lib.py` |
+| `treino_lib.py` | raiz/ | `ml/treino_lib.py` |
+| `ml/__init__.py` | não existia | criado |
+
+### Referências atualizadas (18 arquivos)
+
+| Arquivo | Mudança |
+|---------|--------|
+| `core/app.py` | dynamic import → `ml/scorer.py` com fallback |
+| `core/leakage_test.py` | `from scorer` → `from ml.scorer` |
+| `replay_engine.py` | `from scorer` → `from ml.scorer` |
+| `ml/scorer.py` | `from features_lib` → `from ml.features_lib` |
+| `ml/batch_processor.py` | `from features_lib` → `from ml.features_lib` |
+| `ml/batch_historico.py` | `from features_lib` → `from ml.features_lib` |
+| `ml/dataset_builder.py` | `from features_lib/treino_lib` → `from ml.*` |
+| `ml/replay_temporal.py` | `from features_lib` → `from ml.features_lib` |
+| `ml/lightgbm_tune.py` | `from treino_lib` → `from ml.treino_lib` |
+| `ml/walk_forward.py` | `from treino_lib` → `from ml.treino_lib` |
+| `testes/test_scorer.py` | `from scorer/features_lib/treino_lib` → `from ml.*` |
+| `testes/test_features.py` | `from scorer/features_lib/treino_lib` → `from ml.*` |
+| `testes/test_integracao*.py` | Fix VWAPTracker import (estava quebrado) |
+| `testes/testes_causalidade_v3.py` | `from features_lib` → `from ml.features_lib` |
+| `scripts/verificar_importancia.py` | `from treino_lib` → `from ml.treino_lib` |
+
+### Bug fix
+
+`test_integracao_ponta_a_ponta.py` importava `VWAPTracker` de `scorer` — classe que não existe lá. Corrigido para `from features.vwap_tracker import VWAPTracker`.
+
+---
+
 ## v11.7 — ML como Filtro Primário (29/08/2026)
 
 ### Problema

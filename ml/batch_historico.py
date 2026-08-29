@@ -3,7 +3,7 @@ import argparse
 import json
 import pandas as pd
 from pathlib import Path
-from features_lib import GeradorJanelas
+from ml.features_lib import GeradorJanelas
 
 RAIZ = Path(r'D:\MarketData\Profit\RAWHISTORICO')
 SAIDA = Path(r'D:\MarketData\mimo')

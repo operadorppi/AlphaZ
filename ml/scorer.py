@@ -23,8 +23,8 @@ import pickle
 import time
 import numpy as np
 import pandas as pd
-from features_lib import GeradorJanelas
-from treino_lib import flatten_snapshot, feature_importances
+from ml.features_lib import GeradorJanelas
+from ml.treino_lib import flatten_snapshot, feature_importances
 from features.vwap_tracker import VWAPTracker
 from features.price_context import PrecoContextTracker
 from features.volatility import VolatilityTracker

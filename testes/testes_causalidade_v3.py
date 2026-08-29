@@ -12,7 +12,7 @@ import pandas as pd
 from collections import defaultdict, deque
 
 sys.path.insert(0, os.path.dirname(__file__))
-from features_lib import GeradorJanelas
+from ml.features_lib import GeradorJanelas
 
 # ============================================================
 # CONFIG

@@ -4,7 +4,7 @@ features_lib.py — SHIM DE COMPATIBILIDADE.
 
 Todas as classes e funcoes foram movidas para o pacote features/.
 Este arquivo existe apenas para nao quebrar imports antigos:
-    from features_lib import GeradorJanelas  # ainda funciona
+    from ml.features_lib import GeradorJanelas  # funciona quando rodado de qualquer dir
 
 Gradualmente, todos os imports serao atualizados para:
     from features import GeradorJanelas

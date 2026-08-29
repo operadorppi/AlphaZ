@@ -24,7 +24,7 @@ from collections import defaultdict
 from datetime import datetime, date
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from features_lib import GeradorJanelas, asof_join_linhas
+from ml.features_lib import GeradorJanelas, asof_join_linhas
 
 SAVE_DIR = os.environ.get("SINAL_RT_DIR", r"D:\MarketData\mimo")
 

@@ -30,7 +30,7 @@ from collections import defaultdict, deque
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from features_lib import (
+from ml.features_lib import (
     GeradorJanelas, JanelaFeatures, BookLevelFeatures,
     VolumeProfileTracker, KyleLambdaTracker, VPINTracker, EWMAZScore,
     fase_sessao, dias_ate_vencimento, _tod_de_ts

@@ -21,8 +21,8 @@ from collections import defaultdict
 from datetime import date
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from features_lib import asof_join_linhas, idade_ms
-from treino_lib import flatten_snapshot
+from ml.features_lib import asof_join_linhas, idade_ms
+from ml.treino_lib import flatten_snapshot
 from features_contexto_preco import adicionar_contexto_preco
 from features_expansao import adicionar_expansao
 from features_contexto_avancado import (

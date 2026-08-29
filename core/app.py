@@ -153,15 +153,23 @@ class App:
             if hasattr(importlib, 'util') and hasattr(importlib.util, 'spec_from_file_location'):
                 from pathlib import Path
                 root_path = Path(__file__).resolve().parent.parent
-                scorer_py = root_path / "scorer.py"
-                spec = importlib.util.spec_from_file_location("scorer", str(scorer_py))
+                scorer_py = root_path / "ml" / "scorer.py"
+                if not scorer_py.exists():
+                    scorer_py = root_path / "scorer.py"  # fallback legado
+                spec = importlib.util.spec_from_file_location("ml.scorer", str(scorer_py))
                 if spec is not None:
                     scorer_mod = importlib.util.module_from_spec(spec)
                     if spec.loader:
                         spec.loader.exec_module(scorer_mod)
 
             if scorer_mod is None or not hasattr(scorer_mod, 'ScorerML'):
-                import scorer as scorer_mod
+                try:
+                    from ml.scorer import ScorerML as _ScorerML
+                    class _Mod:
+                        ScorerML = _ScorerML
+                    scorer_mod = _Mod()
+                except ImportError:
+                    import scorer as scorer_mod
 
             ScorerML = getattr(scorer_mod, 'ScorerML')
             ativos = [self.ativo_principal]

@@ -15,9 +15,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np
 import pytest
 
-from scorer import ScorerML
-from features_lib import GeradorJanelas
-from treino_lib import flatten_snapshot
+from ml.scorer import ScorerML
+from ml.features_lib import GeradorJanelas
+from ml.treino_lib import flatten_snapshot
 
 
 class ModeloBom:

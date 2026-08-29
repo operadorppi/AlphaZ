@@ -24,7 +24,7 @@ from pathlib import Path
 # Adiciona a raiz do projeto ao path para localizar os módulos core e features
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scorer import ScorerML
+from ml.scorer import ScorerML
 
 class MockModel:
     """Simula um modelo de ML para permitir o funcionamento do ScorerML sem arquivo .pkl real."""

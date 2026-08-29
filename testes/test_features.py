@@ -18,7 +18,7 @@ if os.path.isdir(scripts_dir):
     sys.path.insert(0, scripts_dir)
 sys.path.insert(0, base_dir)
 
-from features_lib import (
+from ml.features_lib import (
     ewma_update, hhi, entropia, idade_ms,
     JanelaFeatures, BookLevelFeatures, GeradorJanelas,
     asof_join_linhas, VPINTracker,
@@ -294,11 +294,11 @@ class TestAsofJoin:
 
 class TestScorer:
     def test_scorer_import(self):
-        from scorer import ScorerML
+        from ml.scorer import ScorerML
         assert ScorerML is not None
 
     def test_scorer_flatten(self):
-        from scorer import ScorerML
+        from ml.scorer import ScorerML
         snap = {'preco': 100, 'book': {'bid_vol': [10, 20], 'ask_vol': [5, 15]}}
         flat = ScorerML._flatten(snap)
         assert flat['preco'] == 100
@@ -308,7 +308,7 @@ class TestScorer:
 
 class TestTreinoLib:
     def test_flatten_snapshot(self):
-        from treino_lib import flatten_snapshot
+        from ml.treino_lib import flatten_snapshot
         snap = {
             'imbalance': {'L1': 0.5, 'L5': 0.3},
             'bid_vol': [10, 20],
@@ -326,11 +326,11 @@ class TestTreinoLib:
         assert flat['texto'] == 'abc'
 
     def test_flatten_vazio(self):
-        from treino_lib import flatten_snapshot
+        from ml.treino_lib import flatten_snapshot
         assert flatten_snapshot({}) == {}
 
     def test_split_com_purge(self):
-        from treino_lib import split_com_purge
+        from ml.treino_lib import split_com_purge
         import pandas as pd
         import time
         base = int(time.time() * 1000)
@@ -346,7 +346,7 @@ class TestTreinoLib:
         assert gap_s >= 4.0  # pelo menos ~5s de gap
 
     def test_split_sem_tempo(self):
-        from treino_lib import split_com_purge
+        from ml.treino_lib import split_com_purge
         import pandas as pd
         df = pd.DataFrame({'label': [1]*100, 'f1': range(100)})
         train, test = split_com_purge(df, train_pct=0.8)
@@ -354,7 +354,7 @@ class TestTreinoLib:
         assert len(test) == 20
 
     def test_preparar_features(self):
-        from treino_lib import preparar_features
+        from ml.treino_lib import preparar_features
         import pandas as pd
         df = pd.DataFrame({
             'label': [1, -1, 0],
@@ -371,7 +371,7 @@ class TestTreinoLib:
         assert 'feature_b' in cols
 
     def test_avaliar_modelo(self):
-        from treino_lib import avaliar_modelo
+        from ml.treino_lib import avaliar_modelo
         from sklearn.ensemble import RandomForestClassifier
         import pandas as pd
         import numpy as np

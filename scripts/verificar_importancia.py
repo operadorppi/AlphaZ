@@ -11,7 +11,7 @@ from pathlib import Path
 
 # Adiciona a raiz ao path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from treino_lib import feature_importances
+from ml.treino_lib import feature_importances
 
 def verificar(modelo_path):
     if not os.path.exists(modelo_path):
