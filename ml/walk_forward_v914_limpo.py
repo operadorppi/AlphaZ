@@ -139,7 +139,7 @@ def run():
     if faltando:
         raise SystemExit('features do modelo ausentes no parquet: %s' % faltando)
 
-    _COLS = list(dict.fromkeys(['ts_ms', 'label'] + feat_cols))
+    _COLS = list(dict.fromkeys(['ts_ms', 'label', 'retorno_pts'] + feat_cols))
     df = pq.read_table(_path, columns=_COLS).to_pandas()
 
     ts = df['ts_ms'].to_numpy()
