@@ -9,7 +9,7 @@ import time
 import threading
 
 # Watchdog COM: constantes (sobrescrever via monkeypatch nos testes)
-COM_WATCHDOG_TIMEOUT_S = 10    # timeout padrão (s)
+COM_WATCHDOG_TIMEOUT_S = 60    # timeout aumentado para assinatura de milhares de topicos RTD
 COM_WATCHDOG_CHECK_S = 1       # intervalo de checagem (s)
 
 
