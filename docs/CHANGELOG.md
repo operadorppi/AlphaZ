@@ -1,3 +1,30 @@
+## v11.2 — Validação de Timestamp no Parquet (29/08/2026)
+
+### Problema
+
+Timestamps corrompidos do ProfitChart (zero, futuro, passado antigo) entravam no dataset sem validação, quebrando o labeler downstream.
+
+### Solução
+
+Nova função `_validar_timestamp_ms()` em `adapters/rtd_writer.py`:
+
+| Regra | Rejeita |
+|-------|---------|
+| `time_ms <= 0` | Zero ou negativo |
+| `time_ms > agora + 30s` | Clock corrompido (futuro) |
+| `time_ms < agora - 5min` | Replay/dado antigo (passado) |
+| `hora < 09:00 ou > 18:30` | Log debug, mantém (replay útil) |
+
+**Aplicado em:**
+- `thread_escritora` (BOOK): antes de classificar no buffer
+- `thread_escritora_tt` (T&T): antes de criar DataFrame
+
+**Contadores:** `ts_rejeitados` em stats de captura.
+
+**Testes:** 8/8 cenários validados (zero, negativo, agora, futuro 10s, futuro 60s, passado 10s, passado 10min).
+
+---
+
 ## v11.1 — 4 Ativos Simultâneos + CrossAssetManager (29/08/2026)
 
 ### Expansão de 2 para 4 ativos

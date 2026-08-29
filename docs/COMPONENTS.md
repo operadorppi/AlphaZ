@@ -278,14 +278,22 @@
 | `parse_hms_ms(s)` | Parse HH:MM:SS.mmm → ms |
 | `enforce_schema(df, schema)` | Validação de schema |
 
-### adapters/rtd_writer.py (~600 linhas) — Parquet Writers
+### adapters/rtd_writer.py (~730 linhas) — Parquet Writers + Validação TS (v11.2)
 | Função | Descrição |
 |--------|-----------|
-| `thread_escritora(...)` | Writer BOOK: partições Parquet por hora/ativo |
-| `thread_escritora_tt(...)` | Writer T&T: partições Parquet por hora/ativo |
+| `_validar_timestamp_ms(tms, nome)` | Valida timestamp: rejeita zero, futuro >30s, passado >5min |
+| `thread_escritora(...)` | Writer BOOK: valida TS antes de classificar no buffer |
+| `thread_escritora_tt(...)` | Writer T&T: valida TS antes de criar DataFrame |
 | `write_parquet_part(...)` | Grava partição por hora |
 | `consolidar_book_parquet()` | Consolida partições em arquivos únicos |
 | `consolidar_tt_parquet()` | Consolida partições T&T |
+
+**Validação de timestamp (v11.2):**
+```python
+_validar_timestamp_ms(tms) → True/False
+  # Rejeita: zero, negativo, >30s futuro, >5min passado
+  # Log debug para fora do pregão (mantém para replay)
+```
 
 ### adapters/profit_rtd.py (~280 linhas) — MarketDataSource
 | Classe | Descrição |
