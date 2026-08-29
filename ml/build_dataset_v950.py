@@ -426,6 +426,30 @@ def main():
     # 11. Remover NaN labels
     df = df.dropna(subset=['label']).reset_index(drop=True)
     
+    # v11.21: Purge/embargo entre dias (previne leakage na fronteira)
+    # Remove os últimos PURGE_S segundos de cada dia — labels que começam
+    # nesses segundos poderiam ter horizonde que cruza para o próximo dia.
+    PURGE_S = 30  # segundos (>= max_holding_s do labeler)
+    ts_col = 'ts_ms'
+    if ts_col in df.columns:
+        df['_dia_int'] = (_dia_de_ts(df[ts_col])).astype('int64')
+        contagem_antes = len(df)
+        
+        # Para cada dia, marcar as últimas PURGE_S*1000 ms como purge
+        def _marcar_purge(grupo):
+            if len(grupo) == 0:
+                return grupo
+            ts_max = grupo[ts_col].max()
+            corte = ts_max - PURGE_S * 1000
+            grupo['_purge'] = (grupo[ts_col] >= corte).astype('int64')
+            return grupo
+        
+        df = df.groupby('_dia_int', group_keys=False).apply(_marcar_purge)
+        n_purge = df['_purge'].sum()
+        df = df[df['_purge'] == 0].drop(columns=['_purge', '_dia_int']).reset_index(drop=True)
+        print(f'  Purge/Embargo: removidos {n_purge:,} registros ({PURGE_S}s no final de cada dia)')
+        print(f'  Dataset: {contagem_antes:,} -> {len(df):,} linhas')
+    
     # 12. Salvar
     print(f"\n10. Salvando v950: {OUTPUT}")
     df.to_parquet(OUTPUT, index=False)

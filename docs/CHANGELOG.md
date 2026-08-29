@@ -1,3 +1,32 @@
+## v11.21 — Target de Regressão + Purge/Embargo no Dataset Builder (30/08/2026)
+
+### 1. Target de Regressão (ml/retreinar_otimizado.py)
+
+Modo novo via flag `--regression`:
+- **y = retorno_pts** (contínuo: +100, -50, 0)
+- Modelo: `LGBMRegressor` (em vez de `LGBMClassifier`)
+- Métricas: RMSE, MAE, R² (em vez de accuracy/AUC)
+- Trades simulados: predição > 5 → compra, predição < -5 → venda
+- Comparação com modelo antigo desabilitada em modo regressão
+- `modelo.classes_` só salvo em modo classificação
+
+Uso:
+```bash
+# Classificação (default)
+python ml/retreinar_otimizado.py
+
+# Regressão
+python ml/retreinar_otimizado.py --regression
+```
+
+### 2. Purge/Embargo no Dataset Builder (ml/build_dataset_v950.py)
+
+- Remove os últimos 30s de cada dia antes de salvar
+- Previne leakage na fronteira treino/teste
+- Mensagem: "Purge/Embargo: removidos N registros (30s no final de cada dia)"
+
+---
+
 ## v11.9 — ScorerML Integrado ao Motor ao Vivo (29/08/2026)
 
 ### Problema
