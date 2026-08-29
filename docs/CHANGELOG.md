@@ -1,3 +1,30 @@
+## v11.6 — Fix PF Fake: TN não é Lucro (29/08/2026)
+
+### Bug
+
+`ganhos = (tp + tn) * 50` contava TN (True Negative) como lucro.
+
+- **TP**: trade lucrativo → **GANHO** ✅
+- **FP**: trade falso positivo → **PERDA** ✅
+- **FN**: oportunidade perdida → **PERDA** ✅
+- **TN**: não-trade (ficou de fora) → **NEUTRO** ❌ (não era contado como neutro)
+
+Resultado: PF de 256 era completamente fake.
+
+### Correção
+
+```python
+# ANTES (bug)
+ganhos = (tp + tn) * 50  # TN = "ficar de fora" = NÃO É LUCRO
+
+# DEPOIS (correto)
+ganhos = tp * 50  # Só TP gera lucro
+```
+
+Corrigido em 4 arquivos: `retreinar_otimizado.py`, `feature_ablation.py`, `lightgbm_tune.py`, `validar_v914.py`.
+
+---
+
 ## v11.5 — Target Ternário com Custo (29/08/2026)
 
 ### Problema
