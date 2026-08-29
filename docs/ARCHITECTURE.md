@@ -1,5 +1,6 @@
 # Arquitetura
 
+> v11.0 — Arquitetura em Camadas (29/08/2026)
 > v10.0 — Arquitetura em Camadas (27/08/2026)
 
 ## Diagrama Geral
@@ -42,7 +43,9 @@ ProfitChart RTD (COM)
     ▼
 adapters/profit_rtd.py          ← Conexão COM, PumpEvents, RefreshData
     │
-    ├──→ adapters/file_storage.py    ← Grava raw_negocios_ms_*.jsonl (bruto)
+    ├──→ core/capture_daemon.py      ← THREAD IMORTAL: grava JSONL em disco
+    │       │                          (sobrevive crash do trading loop)
+    │       └──→ adapters/file_storage.py  ← raw_negocios_ms_*.jsonl
     │
     ▼
 core/market_state.py            ← Estado: historico, book, stats, OHLC
@@ -65,7 +68,7 @@ core/position_manager.py        ← Abrir / Fechar / TP / SL / Reversão
     ├──→ core/persistence.py         ← Grava trades + decisões + checkpoint
     │
     ▼
-adapters/dashboard_api.py       ← 16 endpoints HTTP
+adapters/dashboard/             ← HTTP dashboard (api, state, handlers)
     │
     ▼
 dashboard_pro.html              ← Dashboard profissional (porta 5001)
@@ -121,20 +124,20 @@ ml/features_contexto_avancado.py ← VWAP, POC, compostos batch
        └── Relatório diário
 ```
 
-## Camadas de Componentes (v10.0)
+## Camadas de Componentes (v11.0)
 
 | Camada | Diretório | Arquivos | Linhas | Responsabilidade |
 |--------|-----------|----------|--------|------------------|
-| **core/** | `core/` | 12 | 2.500+ | Domínio: estado, scoring, posição, risco, regime, aprendizado, persistência, métricas, **loop RTD completo**, orquestrador |
+| **core/** | `core/` | 13 | 2.800+ | Domínio: estado, scoring, posição, risco, regime, aprendizado, persistência, métricas, **loop RTD completo**, orquestrador, **capture daemon** |
 | **features/** | `features/` | 17 | 1.876 | Microestrutura: VPIN, OFI, book, T&T, VP, Kyle, vol, retornos, contexto, sessão, cross-asset, padrões |
 | **config/** | `config/` | 2 | 200 | Configuração: ConfigCompleto, flat/aninhado, defaults |
-| **adapters/** | `adapters/` | 5 | 558 | I/O: RTD (COM), file storage (JSONL), dashboard HTTP, COM watchdog |
+| **adapters/** | `adapters/` | 6 | 700+ | I/O: RTD (COM), file storage (JSONL), dashboard HTTP, COM watchdog, **dashboard/ (api+state+handlers)** |
 | **ml/** | `ml/` | 29 | ~8.000 | Pipeline: labeler, dataset, treino, walk-forward, ablation, features batch |
 | **scripts/** | `scripts/` | 9 | — | Automação: iniciar, parar, pipeline, relatórios |
 | **testes/** | `testes/` | 16 | — | 142 testes (features, contexto, scorer, causalidade, staleness) |
 | **docs/** | `docs/` | 22 | — | Documentação estruturada |
 | **dados/** | `dados/` | 13 | — | Resultados, JSONs, parquets |
-| **Shims** | raiz | 4 | ~60 | motor_rt_alphaz.py (25, shim), motor_web.py (2.585, COM), scorer.py (314, ML), features_lib.py (23, shim), config.py (105) |
+| **Shims** | raiz | 4 | ~60 | motor_rt_alphaz.py (25, shim), motor_web.py (1.116, orchestrator), scorer.py (314, ML), features_lib.py (23, shim), config.py (105) |
 
 ## Shims de Compatibilidade
 
@@ -169,9 +172,10 @@ C:/Freebuff/
 ├── treino_lib.py               # Utilitários de treino
 ├── dashboard_pro.html         # Dashboard profissional
 │
-├── core/                       # 12 arquivos, 2.500+ linhas
+├── core/                       # 13 arquivos, 2.800+ linhas
 │   ├── __init__.py
-│   ├── app.py                  # Orquestrador + LOOP RTD COMPLETO (875 linhas)
+│   ├── app.py                  # Orquestrador + LOOP RTD COMPLETO
+│   ├── capture_daemon.py       # THREAD IMORTAL: captura JSONL (v11.0)
 │   ├── contracts.py            # Dataclasses (Signal, Action, etc)
 │   ├── event_clock.py          # Relógio mestre + parse_hms_ms
 │   ├── market_state.py         # Estado de mercado
@@ -206,12 +210,18 @@ C:/Freebuff/
 │   ├── __init__.py             # Re-export de config.py + config/defaults.py
 │   └── defaults.py             # ConfigCompleto, _aplicar_*, NESTED_TO_FLAT
 │
-├── adapters/                   # 5 arquivos, 558 linhas
+├── adapters/                   # 6 arquivos, 700+ linhas
 │   ├── __init__.py
 │   ├── com_watchdog.py         # COMHeartbeatMonitor (B2)
 │   ├── file_storage.py         # CapturaEventosMS / FileStorage
-│   ├── profit_rtd.py           # ProfitRTD (shim de motor_web.py)
-│   └── dashboard_api.py        # DashboardAPI (Handler HTTP)
+│   ├── profit_rtd.py           # ProfitRTD (MarketDataSource)
+│   ├── rtd_connection.py       # COM interfaces, server, discover, connect
+│   ├── rtd_parser.py           # parse_refresh_data, parse_dat, enforce_schema
+│   ├── rtd_writer.py           # Writer threads, schemas, parquet, stats
+│   └── dashboard/              # Dashboard HTTP desacoplado
+│       ├── api.py              # Roteamento HTTP (tabela de rotas)
+│       ├── state.py            # Estado compartilhado (filas, live stats)
+│       └── handlers.py         # Handlers de cada endpoint
 │
 ├── ml/                         # 29 arquivos
 ├── scripts/                    # 9 arquivos

@@ -1,14 +1,14 @@
 # Componentes
 
-> v10.0 — Referência por módulo (27/08/2026)
+> v11.0 — Referência por módulo (29/08/2026)
 
-## core/ — Domínio do Motor (12 arquivos, 2.153 linhas)
+## core/ — Domínio do Motor (13 arquivos, 2.800+ linhas)
 
-### core/app.py (875 linhas) — Orquestrador + Loop RTD Completo
+### core/app.py (630 linhas) — Orquestrador + Loop RTD Completo
 
 | Método | Descrição |
 |--------|-----------|
-| `__init__(config)` | Compõe: MarketState, SignalEngine, PositionManager, RiskManager, RegimeDetector, Learning, Persistence, Metrics, EventClock, FileStorage, ScorerML |
+| `__init__(config)` | Compõe: MarketState, SignalEngine, PositionManager, RiskManager, RegimeDetector, Learning, Persistence, Metrics, EventClock, **CaptureDaemon**, ScorerML, DashboardServer |
 | `_carregar_scorer()` | Carrega modelo ML do config (opcional) |
 | `_sync_estados()` | Cria EstadoAtivo por ativo descoberto no RTD |
 | `_conectar_e_descobrir()` | Conecta ao ProfitChart via motor_web COM, descobre ativos |
@@ -17,6 +17,7 @@
 | `_loop()` | Loop principal: PumpEvents → RefreshData → processar (com watchdog COM) |
 | `_reconectar()` | Reconexão automática: fecha COM, espera 2s, reconnecta |
 | `_verificar_staleness_reconexao(cooldown)` | Detecta silêncio por ativo e reconecta (pregão, cooldown 30s) |
+| `get_capture_health()` | Status do CaptureDaemon (alive, queue, stats) |
 | `get_rtd_health()` | Status da conexão RTD por ativo |
 | `get_contexto_mercado()` | VWAP, ajuste, distâncias para dashboard |
 | `salvar_sessao(final)` | Flush tudo + checkpoint + aprendizado + padrões |
@@ -132,6 +133,32 @@
 | `get_features()` | Features com regime e OHLC |
 | `get_sinais()` | Sinais atuais |
 
+### core/capture_daemon.py (328 linhas) — Captura Bruta Imortal (v11.0)
+
+**Problema resolvido:** Se o loop de trading crasha, a gravação de dados brutos morria junto — 1 dia de crash = dia perdido.
+
+**Solução:** Thread daemon separada que grava JSONL independentemente do trading.
+
+| Método | Descrição |
+|--------|-----------|
+| `CaptureDaemon(save_dir, session_ts)` | Cria daemon com FileStorage interno |
+| `start()` | Inicia thread daemon |
+| `stop()` | Para daemon e faz flush final |
+| `registrar_negocios(novos)` | Enfileira negócios (thread-safe) |
+| `registrar_book(...)` | Enfileira snapshots de book (thread-safe) |
+| `flush()` | Flush manual para disco |
+| `stats()` | Contadores de captura (recebidos, erros, flushes) |
+| `health_check()` | Status completo (alive, queue_pct, stats) |
+
+**Garantias:**
+- Thread daemon: morre automaticamente com o processo pai
+- try/except por evento: 1 evento com erro não mata o daemon
+- Reconexão automática: se thread morrer, `_loop()` no trading reinicia
+- Queue com limite: 100k eventos (evita OOM)
+- Flush periódico: dados não ficam presos em memória
+
+**Endpoint:** `GET /api/capture_health` → status + stats
+
 ---
 
 ## features/ — Microestrutura (17 arquivos, 1.876 linhas)
@@ -212,7 +239,7 @@
 
 ---
 
-## adapters/ — I/O Externo (5 arquivos, 558 linhas)
+## adapters/ — I/O Externo (6+ módulos, 700+ linhas)
 
 ### adapters/file_storage.py (234 linhas) — Captura Bruta
 | Classe/Método | Descrição |
@@ -223,39 +250,56 @@
 | `_flush_neg/book()` | Flush + fsync + rotação 100MB |
 | `fechar()` | Fecha + grava metadados da sessão |
 
-### adapters/profit_rtd.py (79 linhas) — Conexão COM
+### adapters/rtd_connection.py (~400 linhas) — COM Interfaces
 | Função | Descrição |
 |--------|-----------|
 | `conectar_servidor()` | Conecta ao ProfitChart RTD via COM |
-| `descobrir_ativos_rtd()` | Descobre janelas BOOK/T&T |
-| `preparar_ativos()` | Prepara ativos para assinatura |
+| `_criar_callback()` | Cria callback COM para UpdateNotify |
 | `_connect(srv, strings)` | Assina tópico RTD |
 | `_refresh(srv)` | RefreshData → dados |
+| `descobrir_ativos_rtd()` | Descobre janelas BOOK/T&T |
+| `preparar_ativos()` | Prepara ativos para assinatura |
+| `diagnosticar_rtd()` | Diagnóstico completo do RTD |
+
+### adapters/rtd_parser.py (~230 linhas) — Parsing
+| Função | Descrição |
+|--------|-----------|
 | `parse_refresh_data(data)` | Parse do RefreshData |
 | `parse_dat(s, dia_ref)` | Parse timestamp RTD |
-| `thread_com(...)` | Thread COM com watchdog |
-| `thread_escritora(...)` | Writer book Parquet |
-| `thread_escritora_tt(...)` | Writer T&T Parquet |
+| `parse_hms_ms(s)` | Parse HH:MM:SS.mmm → ms |
 | `enforce_schema(df, schema)` | Validação de schema |
+
+### adapters/rtd_writer.py (~600 linhas) — Parquet Writers
+| Função | Descrição |
+|--------|-----------|
+| `thread_escritora(...)` | Writer BOOK: partições Parquet por hora/ativo |
+| `thread_escritora_tt(...)` | Writer T&T: partições Parquet por hora/ativo |
 | `write_parquet_part(...)` | Grava partição por hora |
-| `_diag()` | Diagnóstico RTD |
+| `consolidar_book_parquet()` | Consolida partições em arquivos únicos |
+| `consolidar_tt_parquet()` | Consolida partições T&T |
+
+### adapters/profit_rtd.py (~280 linhas) — MarketDataSource
+| Classe | Descrição |
+|--------|-----------|
+| `ProfitRTDAdapter` | Implementação live do `MarketDataSource` |
+| `connect()` | Conecta ao RTD, assina tópicos |
+| `events()` | Iterador de `MarketEvent` (TRADE + BOOK) |
+| `disconnect()` | Desconecta do RTD |
+| `get_health()` | Status da conexão |
 
 ### adapters/com_watchdog.py (75 linhas) — Watchdog COM
 | Classe/Constante | Descrição |
 |------------------|-----------|
 | `COMHeartbeatMonitor` | Thread daemon que monitora heartbeat do loop COM |
-| `COMHeartbeatMonitor.heartbeat()` | Registra heartbeat (chamar após cada RefreshData ok) |
-| `COMHeartbeatMonitor.start()` | Inicia thread monitora |
-| `COMHeartbeatMonitor.stop()` | Para thread monitora |
-| `COMHeartbeatMonitor.stuck_event` | Event setado quando COM travado (timeout) |
-| `COMHeartbeatMonitor.stuck_count` | Contagem de detecções (só incrementa 1x por stuck) |
 | `COM_WATCHDOG_TIMEOUT_S` | Timeout padrão: 10s |
 | `COM_WATCHDOG_CHECK_S` | Intervalo de checagem: 1s |
 
-### adapters/dashboard_api.py (154 linhas) — HTTP
-| Classe | Descrição |
-|--------|-----------|
-| `DashboardAPI` | Handler HTTP com 16 endpoints |
+### adapters/dashboard/ — HTTP Dashboard (desacoplado)
+| Arquivo | Descrição |
+|---------|-----------|
+| `api.py` | Roteamento HTTP (tabela de rotas) |
+| `state.py` | Estado compartilhado (filas, live stats) |
+| `handlers.py` | Handlers de cada endpoint |
 
 **Endpoints:**
 
@@ -273,6 +317,7 @@
 | `/api/resumo` | Resumo por ativo |
 | `/api/padroes` | Padrões (spoof, stop-hunt) |
 | `/api/rtd_health` | Status RTD |
+| `/api/capture_health` | Status CaptureDaemon (alive, queue, stats) |
 | `/api/saldo_corretoras` | Saldos por corretora |
 | `/api/contexto` | VWAP, ajuste, distâncias |
 | `/api/historico` | Série temporal por segundo |
@@ -296,14 +341,19 @@ Este shim re-exporta de `core/`:
 | `_sem_dados_por_ativo` | `core.app._sem_dados_por_ativo` |
 | `datetime` | `datetime.datetime` (monkeypatchável nos testes) |
 
-### motor_web.py (2.585 linhas) — Conexão COM Original
+### motor_web.py (1.116 linhas) — Orchestrator RTD (v11)
 
-Contém: _carregar_interfaces, _criar_callback, _connect, _refresh,
-parse_dat, parse_refresh_data, thread_com, thread_escritora,
-thread_escritora_tt, enforce_schema, write_parquet_part,
-consolidar_book/tt_parquet, _diag, _DashboardState.
+Orquestrador fino que delega para `adapters/`. Contém:
+- main() — entry point com argumentos CLI
+- thread_com — loop COM (multi-processo)
+- Manifesto e teste de sanidade (auditoria)
+- Re-exports para backward compat
 
-`adapters/profit_rtd.py` é um shim que re-exporta tudo daqui.
+Responsabilidades delegadas para `adapters/`:
+- `rtd_connection.py` — COM interfaces, server, discover, connect
+- `rtd_parser.py` — parse_refresh_data, parse_dat, enforce_schema
+- `rtd_writer.py` — writer threads, schemas, parquet, stats
+- `dashboard/` — HTTP dashboard (api, state, handlers)
 
 ### scorer.py (314 linhas) — ScorerML Live
 | Classe | Descrição |

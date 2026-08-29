@@ -1,3 +1,53 @@
+## v11.0 — CaptureDaemon + Desacoplamento RTD (29/08/2026)
+
+### CaptureDaemon — Captura Bruta Imortal
+
+**Problema:** Se o loop de trading (`core/app.py`) crasha, a gravação de dados brutos (JSONL) morria junto — 1 dia de crash = dia perdido.
+
+**Solução:** `core/capture_daemon.py` — thread daemon separada que:
+- Recebe eventos via queue thread-safe
+- Grava JSONL em disco independentemente do trading
+- Sobrevive a crashes do loop de trading (try/except por evento)
+- É reiniciada automaticamente se a thread morrer
+- Expõe `health_check()` e `stats()` para monitoramento
+
+**Fluxo:**
+```
+App._loop() → capture_daemon.registrar_negocios() / registrar_book()
+              → thread interna → FileStorage (JSONL) → disco
+```
+
+**Endpoint:** `GET /api/capture_health`
+
+### Desacoplamento motor_web.py
+
+| Antes | Depois |
+|-------|--------|
+| motor_web.py = 2.193 linhas (monolito) | motor_web.py = 1.116 linhas (orchestrator) |
+| 6 responsabilidades misturadas | 7 módulos em `adapters/` |
+| `adapters/dashboard_api.py` (485L inline HTML) | `adapters/dashboard/` (api+state+handlers, 400L) |
+| `profit_rtd.py` importava `motor_web` | `profit_rtd.py` importa de `adapters/`
+
+**Novos módulos:**
+- `adapters/rtd_connection.py` — COM interfaces, server, discover, connect
+- `adapters/rtd_parser.py` — parse_refresh_data, parse_dat, enforce_schema
+- `adapters/rtd_writer.py` — writer threads, schemas, parquet, stats
+- `adapters/dashboard/api.py` — Roteamento HTTP (tabela de rotas)
+- `adapters/dashboard/state.py` — Estado compartilhado
+- `adapters/dashboard/handlers.py` — Handlers de cada endpoint
+- `core/capture_daemon.py` — Daemon de captura bruta
+
+**Arquitetura de dependências:**
+```
+adapters/ → só importa adapters/ (e core.contracts para tipos)
+core/     → só importa core/ e features/
+features/ → zero imports internos
+```
+
+**Testes:** 132 arquivos, 0 erros de sintaxe. CaptureDaemon testado isoladamente (start, eventos, flush, stop).
+
+---
+
 ## v10.2 — Saneamento e Robustez Operacional (28/08/2026)
 
 ### Correção de Dívida Técnica (v10.0)
