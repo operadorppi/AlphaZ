@@ -12,9 +12,9 @@ import pandas as pd
 from sklearn.metrics import accuracy_score, roc_auc_score, confusion_matrix
 from datetime import date, datetime
 
-PARQUET_PATH = r'D:\MarketData\mimo\26\dataset_final_WINV26_v950.parquet'  # v11.20: limpo
+PARQUET_PATH = r'D:\MarketData\mimo\dataset_final.parquet'  # v12.1: pipeline multi-ativo (sem cross-asset)
 # v9.32: dataset enriquecido com ajuste oficial + VWAP + regime
-PARQUET_PATH_COMPL = r'D:\MarketData\mimo\26\dataset_final_completo.parquet'
+PARQUET_PATH_COMPL = r'D:\MarketData\mimo\26\dataset_final_completo.parquet'  # fallback antigo (contaminado)
 OLD_MODEL_PATH = r'D:\MarketData\mimo\26\modelo_lgbm_v3.pkl'
 NEW_MODEL_PATH = r'D:\MarketData\mimo\26\modelo_lgbm_v4_limpo.pkl'
 

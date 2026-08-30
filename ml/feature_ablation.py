@@ -15,7 +15,7 @@ import pandas as pd
 from pathlib import Path
 from sklearn.metrics import accuracy_score, roc_auc_score
 
-DATASET = r'D:\MarketData\mimo\26\dataset_final_WINV26_v950.parquet'  # v11.20: limpo
+DATASET = r'D:\MarketData\mimo\dataset_final.parquet'  # v12.1: pipeline multi-ativo
 MODELO = r'D:\MarketData\mimo\26\modelo_lgbm_v4_limpo.pkl'
 
 

@@ -27,7 +27,7 @@ from datetime import datetime
 # ============================================================
 # CONFIG
 # ============================================================
-PARQUET_PATH = r'D:\MarketData\mimo\26\dataset_final_WINV26_v950.parquet'  # v11.20: limpo
+PARQUET_PATH = r'D:\MarketData\mimo\dataset_final.parquet'  # v12.1: pipeline multi-ativo
 OUTPUT_DIR = r'D:\MarketData\mimo'
 
 PROIBIDAS = ['label', 'saida', 'retorno', 'duracao', 'atingido', 'ts_ms',

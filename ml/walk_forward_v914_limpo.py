@@ -33,7 +33,7 @@ from sklearn.metrics import (
     f1_score, confusion_matrix, brier_score_loss,
 )
 
-PATH = 'D:/MarketData/mimo/26/dataset_final_WINV26_v950.parquet'  # v11.20: limpo, so WIN
+PATH = 'D:/MarketData/mimo/dataset_final.parquet'  # v12.1: pipeline multi-ativo
 PATH_COMPL = None  # v11.20: nao usar completo (contaminado)
 OUT = 'walk_forward_v950.json'
 PURGE_S = 30

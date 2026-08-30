@@ -60,7 +60,7 @@ FEATURES_OTIMIZADAS = [
 ]
 
 # Paths
-DATASET = r'D:\MarketData\mimo\26\dataset_final_WINV26_v950.parquet'  # v11.20: limpo
+DATASET = r'D:\MarketData\mimo\dataset_final.parquet'  # v12.1: pipeline multi-ativo
 MODELO_OUT = r'D:\MarketData\mimo\26\modelo_lgbm_v5_otimizado.pkl'
 SAVE_DIR = r'D:\MarketData\mimo'
 

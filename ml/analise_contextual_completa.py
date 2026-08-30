@@ -9,7 +9,7 @@ print('  ANALISE CONTEXTUAL COMPLETA - Freebuff v9.37')
 print('='*70)
 t0 = time.time()
 print('[1/6] Carregando dataset...')
-PF = 'D:/MarketData/mimo/26/dataset_final_WINV26_v950.parquet'  # v11.20: limpo
+PF = 'D:/MarketData/mimo/dataset_final.parquet'  # v12.1: pipeline multi-ativo
 df = pd.read_parquet(PF)
 # Amostra para viabilidade
 df = df.sample(200000, random_state=42)
