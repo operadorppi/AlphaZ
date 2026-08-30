@@ -20,16 +20,25 @@ from typing import Optional, List, Dict, Any, Union, Literal
 
 @dataclass(frozen=True)
 class TradeEvent:
-    """Evento de negócio individual (T&T)."""
+    """Evento de negócio individual (T&T).
+
+    Timestamps (Fase 2 — contrato temporal):
+      - timestamp_ms:  timestamp do EVENTO DE MERCADO (do Profit DAT, nunca wall clock)
+      - received_at_ns: momento em que o processo Python recebeu o evento (nanossegundos)
+      - sequence_id:   ordem determinística local (contador monotônico)
+
+    NUNCA usar timestamp_ms = received_at. São coisas diferentes.
+    """
     symbol: str
-    timestamp_ms: int
+    timestamp_ms: int          # event_ts_ms — timestamp do mercado (do DAT do Profit)
     price: float
     quantity: int
     aggressor: str       # 'Comprador', 'Vendedor', 'neutro'
     buyer: str
     seller: str
-    received_at: int     # Timestamp epoch ms do recebimento no Python
-    schema_version: str = "1.0"
+    received_at_ns: int = 0   # receive_ts_ns — momento de recebimento no Python (nanossegundos)
+    sequence_id: int = 0      # ordem determinística local
+    schema_version: str = "2.0"
 
     def __post_init__(self):
         if self.price <= 0:
@@ -38,6 +47,11 @@ class TradeEvent:
             raise ValueError(f"Quantidade inválida para {self.symbol}: {self.quantity}")
         if not self.symbol:
             raise ValueError("Símbolo obrigatório")
+
+    @property
+    def received_at_ms(self) -> int:
+        """received_at_ns em milissegundos (compatibilidade)."""
+        return self.received_at_ns // 1_000_000 if self.received_at_ns else 0
 
 
 @dataclass(frozen=True)
@@ -52,11 +66,11 @@ class BookLevel:
 class BookSnapshot:
     """Estado completo do livro em um instante T."""
     symbol: str
-    timestamp_ms: int
+    timestamp_ms: int        # event_ts_ms (do Profit ou wall clock se não disponível)
     bids: List[BookLevel]
     asks: List[BookLevel]
-    received_at: int
-    schema_version: str = "1.0"
+    received_at_ns: int = 0  # receive_ts_ns
+    schema_version: str = "2.0"
 
 
 @dataclass(frozen=True)

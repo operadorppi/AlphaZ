@@ -50,7 +50,7 @@ class ReplayAdapter(MarketDataSource):
                         aggressor=data['agressor'],
                         buyer=data.get('compradora', ''),
                         seller=data.get('vendedora', ''),
-                        received_at=ts
+                        received_at_ns=ts * 1_000_000  # ms -> ns
                     )
                     
                     yield MarketEvent(

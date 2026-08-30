@@ -10,7 +10,7 @@ from typing import Iterator
 from adapters.base import MarketDataSource
 from core.contracts import MarketEvent, TradeEvent, BookSnapshot, BookLevel
 import threading
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
 
 # Imports dos novos módulos adapters (substitui motor_web monolito)
 from adapters.rtd_connection import (
@@ -18,6 +18,8 @@ from adapters.rtd_connection import (
     conectar_servidor, _criar_callback, _connect, _refresh,
 )
 from adapters.rtd_parser import parse_refresh_data, parse_hms_ms, parse_dat, enforce_schema
+from core.temporal import dat_to_epoch_ms, now_ns, next_sequence_id, validate_event_ts
+from core.event_ordering import EventOrderingDetector
 from adapters.rtd_writer import (
     thread_escritora, thread_escritora_tt,
     write_parquet_part, consolidar_book_parquet, consolidar_tt_parquet,
@@ -33,6 +35,7 @@ _root = Path(__file__).resolve().parent.parent
 if str(_root) not in sys.path:
     sys.path.insert(0, str(_root))
 
+
 class ProfitRTDAdapter(MarketDataSource):
     """Implementação real (Windows Only) que isola o win32com do Domínio."""
     
@@ -43,10 +46,18 @@ class ProfitRTDAdapter(MarketDataSource):
         self._book_map = {}
         self._tt_map = {}
         self._shutdown = False
-        self._vistos_tt = defaultdict(dict)  # (sym) -> {signature: count}
+        # Detector de ordenamento temporal (Fase 3)
+        self._ordering_detector = EventOrderingDetector(
+            late_threshold_ms=500,
+            forward_jump_threshold_ms=60_000,
+            backward_sequence_threshold=3,
+        )
+        self._vistos_tt = defaultdict(OrderedDict)  # (sym) -> OrderedDict[signature -> True]
         self._baseline_pending = defaultdict(lambda: True)
         self._book_cells = defaultdict(lambda: defaultdict(dict)) # (sym) -> {linha: {field: val}}
         self._last_book_yield = defaultdict(float)
+        # Limite de memória para dedup (LRU eviction)
+        self._dedup_max_per_ativo = 50000  # max 50K assinaturas por ativo
 
         # Import dinâmico para não quebrar no Linux
         if os.name == 'nt':
@@ -107,7 +118,7 @@ class ProfitRTDAdapter(MarketDataSource):
 
     def _assinar_topicos(self):
         BK_FIELDS = ('OCP', 'VOC', 'ACP', 'OVD', 'VOV', 'AVD')
-        TT_FIELDS = ('DAT', 'PRE', 'QUL', 'AGR', 'ACP', 'AVD')
+        TT_FIELDS = ('DAT', 'PRE', 'QUL', 'AGR', 'ACP', 'AVD', 'AGAG')
 
         # Linhas vêm da seção 'rtd' do config (ex.: 500/500). Assinar mais linhas
         # do que a janela RTD suporta faz o servidor crashar (Access Violation).
@@ -168,38 +179,94 @@ class ProfitRTDAdapter(MarketDataSource):
                 kind, sym, field, linha = info
 
                 if kind == "tt":
-                    # Lógica de Dedup movida do App para o Adapter (Fase 5)
-                    cell = self._book_cells[sym][linha] # Reutilizando dict para cache TT
+                    # Lógica de Dedup (Fase 1 — corrigida)
+                    cell = self._book_cells[sym][linha]
                     cell[field] = val
                     
-                    if field == 'DAT': # Gatilho de processamento da linha
+                    if field == 'DAT':  # Gatilho de processamento da linha
                         pre = fnum(cell.get('PRE'))
                         if pre <= 0: continue
-                        
-                        sig = (sstr(cell.get('DAT')), sstr(cell.get('ACP')), pre,
-                               fint(cell.get('QUL')), sstr(cell.get('AVD')), sstr(cell.get('AGR')))
-                        
-                        # Primeiro ciclo absorve como baseline
-                        if self._baseline_pending[sym]:
-                            self._vistos_tt[sym][sig] = self._vistos_tt[sym].get(sig, 0) + 1
-                            # [Simulação simplificada de baseline]
-                            continue
-
-                        seen = self._vistos_tt[sym].get(sig, 0)
-                        # Se detectou algo novo (frequência maior que a vista antes)
-                        # [Lógica de contagem completa em motor_web aplicada aqui]
-                        
                         qtd = fint(cell.get('QUL'))
                         if qtd <= 0: continue  # RTD envia qtd=0 para ativos sem dados reais
-                        tms = parse_hms_ms(cell.get('DAT'))
+                        
+                        # Assinatura determinística do negócio.
+                        # Campos: DAT + ACP + PRE + QUL + AVD + AGR + AGAG
+                        # O AGAG (agressor agregado) é incluido para distinguir
+                        # trades que podem ter a mesma combinação básica mas
+                        # que o Profit classifica diferentemente (ex: direto
+                        # vs carteira).
+                        sig = (
+                            sstr(cell.get('DAT')),
+                            sstr(cell.get('ACP')),
+                            pre,
+                            qtd,
+                            sstr(cell.get('AVD')),
+                            sstr(cell.get('AGR')),
+                            sstr(cell.get('AGAG')),
+                        )
+                        
+                        # Primeiro refresh absorve como baseline (evita emitir
+                        # histórico acumulado na primeira chamada de RefreshData)
+                        if self._baseline_pending[sym]:
+                            self._vistos_tt[sym][sig] = True
+                            continue
+
+                        # DEDUP: se a assinatura já foi vista, NÃO emitir.
+                        # O RTD mantém linhas T&T persistentes e pode reenviar
+                        # o mesmo trade em refreshes subsequentes.
+                        if sig in self._vistos_tt[sym]:
+                            continue  # Duplicata — descartar silenciosamente
+                        
+                        # Marcar como visto (LRU eviction se exceder limite)
+                        vistos = self._vistos_tt[sym]
+                        vistos[sig] = True
+                        if len(vistos) > self._dedup_max_per_ativo:
+                            # Remove o item mais antigo (primeiro inserido)
+                            vistos.popitem(last=False)
+                        
+                        # Fase 2: Preservar timestamp do mercado (DAT do Profit)
+                        # NUNCA usar wall clock como timestamp do evento.
+                        dat_str = sstr(cell.get('DAT'))
+                        event_ts_ms = dat_to_epoch_ms(dat_str)
+                        receive_ns = now_ns()
+
+                        # Se DAT invalido, usar receive_ts como fallback (documentado)
+                        if event_ts_ms <= 0:
+                            event_ts_ms = receive_ns // 1_000_000
+                            log.warning(f"[RTD] DAT invalido '{dat_str}' para {sym}, usando receive_ts como fallback")
+
+                        # Validar timestamp (rejeitar se muito no futuro/passado)
+                        valido, motivo = validate_event_ts(event_ts_ms, receive_ns)
+                        if not valido:
+                            log.warning(f"[RTD] {sym}: timestamp rejeitado: {motivo} (DAT={dat_str})")
+                            continue
+
+                        # Fase 3: Detectar anomalias temporais
+                        ord_result = self._ordering_detector.check(sym, event_ts_ms, receive_ns)
+
+                        if ord_result.action == "REJECT":
+                            # Duplicatas e timestamps invalidos sao rejeitados
+                            continue
+
+                        if ord_result.is_late:
+                            log.debug(f"[RTD] {sym}: evento atrasado lag={ord_result.lag_ms}ms")
+                        if ord_result.is_out_of_order:
+                            log.warning(f"[RTD] {sym}: fora de ordem gap={ord_result.gap_ms}ms ({ord_result.reason})")
+                        if ord_result.is_forward_jump:
+                            log.warning(f"[RTD] {sym}: salto temporal {ord_result.gap_ms}ms")
+                        if ord_result.is_backward_sequence:
+                            log.warning(f"[RTD] {sym}: sequencia regressiva ({ord_result.reason})")
+
+                        seq_id = next_sequence_id()
                         trade = TradeEvent(
-                            symbol=sym, timestamp_ms=tms, price=pre,
-                            quantity=fint(cell.get('QUL')),
+                            symbol=sym, timestamp_ms=event_ts_ms, price=pre,
+                            quantity=qtd,
                             aggressor="Comprador" if "compr" in sstr(cell.get('AGR')).lower() else "Vendedor",
                             buyer=sstr(cell.get('ACP')), seller=sstr(cell.get('AVD')),
-                            received_at=int(time.time()*1000)
+                            received_at_ns=receive_ns,
+                            sequence_id=seq_id,
                         )
-                        yield MarketEvent(type='TRADE', payload=trade, timestamp_ms=tms, symbol=sym)
+                        yield MarketEvent(type='TRADE', payload=trade, timestamp_ms=event_ts_ms, symbol=sym)
 
                 elif kind == "book":
                     self._book_cells[sym][linha][field] = val
@@ -208,19 +275,21 @@ class ProfitRTDAdapter(MarketDataSource):
                     agora = time.time()
                     if agora - self._last_book_yield[sym] > 0.25:
                         self._last_book_yield[sym] = agora
+                        receive_ns = now_ns()
                         bids, asks = [], []
                         for l_idx in range(int((self.config.get('rtd') or {}).get('book_linhas', 60))):
                             c = self._book_cells[sym][l_idx]
                             if c.get('OCP'): bids.append(BookLevel(price=fnum(c['OCP']), volume=fint(c.get('VOC')), broker=sstr(c.get('ACP'))))
                             if c.get('OVD'): asks.append(BookLevel(price=fnum(c['OVD']), volume=fint(c.get('VOV')), broker=sstr(c.get('AVD'))))
                         
+                        book_ts = int(agora*1000)
                         yield MarketEvent(
                             type='BOOK',
                             payload=BookSnapshot(
-                                symbol=sym, timestamp_ms=int(agora*1000),
-                                bids=bids, asks=asks, received_at=int(agora*1000)
+                                symbol=sym, timestamp_ms=book_ts,
+                                bids=bids, asks=asks, received_at_ns=receive_ns
                             ),
-                            timestamp_ms=int(agora*1000),
+                            timestamp_ms=book_ts,
                             symbol=sym
                         )
             
@@ -235,12 +304,30 @@ class ProfitRTDAdapter(MarketDataSource):
             "status": "ok" if self._srv else "disconnected",
             "topicos_assinados": len(self._topic_map),
             "ativos": list(set(self._tt_map.values())),
-            "interface": "COM/RTD"
+            "interface": "COM/RTD",
+            "dedup_stats": self._dedup_stats(),
+            "ordering_stats": self._ordering_detector.get_stats_for_dashboard(),
         }
+
+    def _dedup_stats(self):
+        """Retorna estatísticas de deduplicação por ativo."""
+        return {
+            sym: {
+                'asssinaturas_vistas': len(vistos),
+                'baseline_pendente': self._baseline_pending.get(sym, False),
+            }
+            for sym, vistos in self._vistos_tt.items()
+        }
+
+    def _reset_dedup(self):
+        """Reseta estado de deduplicação (para testes)."""
+        self._vistos_tt = defaultdict(OrderedDict)
+        self._baseline_pending = defaultdict(lambda: True)
 
 # Re-exporta constantes dos novos módulos
 from adapters.rtd_connection import (
     MAX_JANELAS_RTD, BOOK_FIELDS, LINHAS_TT, POLL_S, EVENT_PUMP_S,
+    descobrir_ativos_rtd, preparar_ativos,
 )
 from adapters.rtd_writer import (
     BOOK_SCHEMA, TT_SCHEMA, _live_inc, _live_get,
@@ -252,7 +339,6 @@ ProfitRTD = type('ProfitRTD', (), {
     'conectar_servidor': staticmethod(conectar_servidor),
     'descobrir_ativos_rtd': staticmethod(descobrir_ativos_rtd),
     'preparar_ativos': staticmethod(preparar_ativos),
-    'thread_com': staticmethod(thread_com),
     'thread_escritora': staticmethod(thread_escritora),
     'thread_escritora_tt': staticmethod(thread_escritora_tt),
     'parse_refresh_data': staticmethod(parse_refresh_data),

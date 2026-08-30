@@ -542,6 +542,12 @@ class App:
     def get_book_stats(self):
         return self.market_state.get_book_stats()
 
+    def get_ordering_stats(self):
+        """Retorna métricas de ordenamento temporal (Fase 3)."""
+        if self.data_source and hasattr(self.data_source, '_ordering_detector'):
+            return self.data_source._ordering_detector.get_stats_for_dashboard()
+        return {}
+
     def get_book_level(self):
         return self.market_state.get_book_level()
 
