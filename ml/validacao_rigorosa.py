@@ -82,46 +82,51 @@ def preparar_features(df):
 
 
 def avaliar_completo(modelo, X_test, y_test, tp_pts=TP_PTS, sl_pts=SL_PTS):
-    """Avaliação completa: accuracy, AUC, PF, expectancy, drawdown, sinais."""
-    from sklearn.metrics import accuracy_score, roc_auc_score, confusion_matrix
+    """Avaliação completa: accuracy, AUC, ECE, precision/recall, sinais.
+
+    NOTA: Profit Factor (PF) NÃO é calculado aqui.
+    O PF só pode ser medido via simulação de execução real no
+    replay_engine.py, com regras de 1 trade por vez, TP/SL, slippage e custo.
+    TN é "não trade" — não gera P&L.
+    """
+    from sklearn.metrics import accuracy_score, roc_auc_score, confusion_matrix, precision_score, recall_score
+    import numpy as np
 
     y_pred = modelo.predict(X_test)
 
     result = {
         'acuracia': accuracy_score(y_test, y_pred),
         'auc': None,
-        'profit_factor': 0,
-        'expectancy': 0,
+        'profit_factor': None,  # Calcular no replay_engine.py
+        'expectancy': None,     # Calcular no replay_engine.py
         'n_sinais_pos': int(np.sum(y_pred == 1)),
         'n_sinais_neg': int(np.sum(y_pred == 0)),
         'n_labels_pos': int(np.sum(y_test == 1)),
         'n_labels_neg': int(np.sum(y_test == 0)),
-        'drawdown_max': 0,
+        'drawdown_max': 0,  # Calcular no replay_engine.py
     }
 
     if hasattr(modelo, 'predict_proba') and len(np.unique(y_test)) > 1:
         y_prob = modelo.predict_proba(X_test)[:, 1]
         result['auc'] = roc_auc_score(y_test, y_prob)
+        # ECE (Expected Calibration Error)
+        bins = np.linspace(0, 1, 11)
+        ece = 0.0
+        for lo, hi in zip(bins[:-1], bins[1:]):
+            mask = (y_prob >= lo) & (y_prob < hi)
+            if mask.sum() > 0:
+                acc_bin = y_test[mask].mean()
+                conf_bin = y_prob[mask].mean()
+                ece += mask.sum() / len(y_test) * abs(acc_bin - conf_bin)
+        result['ece'] = round(float(ece), 4)
 
+    # Precision/Recall
+    result['precision'] = round(float(precision_score(y_test, y_pred, zero_division=0)), 4)
+    result['recall'] = round(float(recall_score(y_test, y_pred, zero_division=0)), 4)
+
+    # Matriz de confusão (para referência)
     cm = confusion_matrix(y_test, y_pred, labels=[0, 1])
-    ganhos = (cm[1, 1] + cm[0, 0]) * tp_pts
-    perdas = (cm[1, 0] + cm[0, 1]) * sl_pts
-
-    if perdas > 0:
-        result['profit_factor'] = ganhos / perdas
-    result['expectancy'] = (ganhos - perdas) / max(cm.sum(), 1)
-
-    # Drawdown simples: sequência máxima de perdas
-    trades = (y_pred == y_test).astype(int)
-    max_dd = 0
-    dd_atual = 0
-    for t in trades:
-        if t == 0:
-            dd_atual += sl_pts
-            max_dd = max(max_dd, dd_atual)
-        else:
-            dd_atual = max(0, dd_atual - tp_pts)
-    result['drawdown_max'] = max_dd
+    result['cm'] = {'tn': int(cm[0,0]), 'fp': int(cm[0,1]), 'fn': int(cm[1,0]), 'tp': int(cm[1,1])}
 
     return result
 
@@ -299,9 +304,15 @@ def walk_forward_rigoroso():
     print('\n--- RESULTADO GLOBAL ---')
     print(f'  Accuracy: {result_global["acuracia"]:.4f}')
     print(f'  AUC-ROC: {result_global["auc"]:.4f}' if result_global['auc'] else '  AUC-ROC: N/A')
-    print(f'  Profit Factor: {result_global["profit_factor"]:.2f}')
-    print(f'  Expectancy: {result_global["expectancy"]:+.1f} pts')
-    print(f'  Drawdown max: {result_global["drawdown_max"]} pts')
+    pf = result_global.get('profit_factor')
+    pf_str = f'{pf:.2f}' if pf else '[replay_engine.py]'
+    print(f'  Profit Factor: {pf_str}')
+    exp = result_global.get('expectancy')
+    exp_str = f'{exp:+.1f} pts' if exp is not None else '[replay_engine.py]'
+    print(f'  Expectancy: {exp_str}')
+    dd = result_global.get('drawdown_max', 0)
+    dd_str = f'{dd} pts' if dd else '[replay_engine.py]'
+    print(f'  Drawdown max: {dd_str}')
     print(f'  Sinais +1: {result_global["n_sinais_pos"]}')
     print(f'  Sinais -1: {result_global["n_sinais_neg"]}')
 
@@ -322,8 +333,12 @@ def walk_forward_rigoroso():
         print(f'\n  {dia}:')
         print(f'    Accuracy: {result_dia["acuracia"]:.4f}')
         print(f'    AUC: {result_dia["auc"]:.4f}' if result_dia['auc'] else '    AUC: N/A')
-        print(f'    PF: {result_dia["profit_factor"]:.2f}')
-        print(f'    Exp: {result_dia["expectancy"]:+.1f} pts')
+        pf_d = result_dia.get('profit_factor')
+        pf_d_str = f'{pf_d:.2f}' if pf_d else '[replay]'
+        print(f'    PF: {pf_d_str}')
+        exp_d = result_dia.get('expectancy')
+        exp_d_str = f'{exp_d:+.1f} pts' if exp_d is not None else '[replay]'
+        print(f'    Exp: {exp_d_str}')
         print(f'    Sinais: +1={result_dia["n_sinais_pos"]} -1={result_dia["n_sinais_neg"]}')
 
     # Feature importances
@@ -421,18 +436,23 @@ def ablacao_features():
 
         print(f'  Accuracy: {result["acuracia"]:.4f}')
         print(f'  AUC: {result["auc"]:.4f}' if result['auc'] else '  AUC: N/A')
-        print(f'  PF: {result["profit_factor"]:.2f}')
-        print(f'  Exp: {result["expectancy"]:+.1f} pts')
+        pf_r = result.get('profit_factor')
+        pf_r_str = f'{pf_r:.2f}' if pf_r else '[replay]'
+        print(f'  PF: {pf_r_str}')
+        exp_r = result.get('expectancy')
+        exp_r_str = f'{exp_r:+.1f} pts' if exp_r is not None else '[replay]'
+        print(f'  Exp: {exp_r_str}')
 
     # Compara grupos
     print('\n--- COMPARAÇÃO ---')
-    print(f'{"Grupo":20s} {"Feat":>5s} {"Acc":>8s} {"AUC":>8s} {"PF":>8s} {"Exp":>8s}')
+    print(f'{"Grupo":20s} {"Feat":>5s} {"Acc":>8s} {"AUC":>8s} {"PF":>14s}')
     print('-'*60)
 
-    for nome, res in sorted(resultados.items(), key=lambda x: x[1]['resultado']['profit_factor'], reverse=True):
+    for nome, res in sorted(resultados.items(), key=lambda x: x[1]['resultado'].get('auc') or 0, reverse=True):
         r = res['resultado']
-        auc_str = f'{r["auc"]:.4f}' if r['auc'] else 'N/A'
-        print(f'{nome:20s} {res["n_features"]:5d} {r["acuracia"]:8.4f} {auc_str:>8s} {r["profit_factor"]:8.2f} {r["expectancy"]:+8.1f}')
+        auc_str = f'{r["auc"]:.4f}' if r.get('auc') else 'N/A'
+        pf_s = f'{r.get("profit_factor", 0):.2f}' if r.get('profit_factor') else '[replay]'
+        print(f'{nome:20s} {res["n_features"]:5d} {r["acuracia"]:8.4f} {auc_str:>8s} {pf_s:>14s}')
 
     # Salva
     with open(OUTPUT_DIR / 'ablacao_features.json', 'w') as f:
@@ -503,8 +523,12 @@ def testar_robustez():
 
         print(f'  Accuracy: {result["acuracia"]:.4f}')
         print(f'  AUC: {result["auc"]:.4f}' if result['auc'] else '  AUC: N/A')
-        print(f'  PF: {result["profit_factor"]:.2f}')
-        print(f'  Exp: {result["expectancy"]:+.1f} pts')
+        pf_r = result.get('profit_factor')
+        pf_r_str = f'{pf_r:.2f}' if pf_r else '[replay]'
+        print(f'  PF: {pf_r_str}')
+        exp_r = result.get('expectancy')
+        exp_r_str = f'{exp_r:+.1f} pts' if exp_r is not None else '[replay]'
+        print(f'  Exp: {exp_r_str}')
 
     # Salva
     with open(OUTPUT_DIR / 'robustez.json', 'w') as f:
@@ -521,19 +545,19 @@ def gerar_relatorio_final(wf_result, ablacao_result, robustez_result):
 
     # Classificação: A, B ou C
     resultado_global = wf_result['resultado_global']
-    pf = resultado_global['profit_factor']
-    auc = resultado_global['auc'] or 0
+    pf = resultado_global.get('profit_factor') or 0
+    auc = resultado_global.get('auc') or 0
 
-    # Critérios
-    if pf > 2.0 and auc > 0.6:
+    # Critérios (AUC-based, sem PF fake)
+    if auc > 0.60:
         classificacao = 'A'
-        descricao = 'Resultado CONFIRMADO: sinal permanece fora da amostra'
-    elif pf > 1.5 and auc > 0.55:
+        descricao = 'Resultado CONFIRMADO: AUC > 0.60 fora da amostra'
+    elif auc > 0.55:
         classificacao = 'B'
-        descricao = 'Resultado PARCIALMENTE CONFIRMADO: sinal existe, mas perde força'
+        descricao = 'Resultado PARCIALMENTE CONFIRMADO: AUC > 0.55 mas < 0.60'
     else:
         classificacao = 'C'
-        descricao = 'Resultado NÃO CONFIRMADO: performance desaparece fora da amostra'
+        descricao = 'Resultado NÃO CONFIRMADO: AUC <= 0.55 (sem discriminacao)'
 
     print(f'\nClassificação: {classificacao}')
     print(f'Descrição: {descricao}')
@@ -556,8 +580,10 @@ def gerar_relatorio_final(wf_result, ablacao_result, robustez_result):
     # Robustez
     print('\nRobustez:')
     for nome, res in robustez_result.items():
-        pf_res = res['resultado']['profit_factor']
-        print(f'  {nome}: PF={pf_res:.2f}')
+        pf_res = res['resultado'].get('profit_factor')
+        pf_str = f'{pf_res:.2f}' if pf_res else '[replay]'
+        auc_res = res['resultado'].get('auc') or 0
+        print(f'  {nome}: AUC={auc_res:.4f}, PF={pf_str}')
 
     # Relatório completo
     relatorio = {

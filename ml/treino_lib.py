@@ -174,51 +174,56 @@ def aplicar_encoding(df, cat_cols):
 
 
 def avaliar_modelo(modelo, X_test, y_test, tp_pts=50, sl_pts=30, modo='binario'):
-    """Avalia modelo e imprime métricas.
+    """Avalia modelo e retorna métricas de CLASSIFICAÇÃO (não P&L).
 
-    modo='binario' (default): PF baseado em trades LONG ONLY (como o motor
-    executa). modo='3classes': só conta corretos 1→1 e -1→-1 como ganho
-    (erros de 1↔-1 contam como perda dupla).
+    NOTA: Profit Factor (PF) NÃO é calculado aqui.
+    O PF só pode ser medido via simulação de execução real no
+    replay_engine.py, com regras de 1 trade por vez, TP/SL, slippage e custo.
+    Aqui, FP/FN são previsões erradas, não trades perdidos.
+    TN é "não trade" — não gera P&L.
 
     Returns:
-        dict com acuracia, auc, profit_factor, expectancy
+        dict com acuracia, auc, ece, precision, recall, n_trades_previstos
     """
-    from sklearn.metrics import accuracy_score, roc_auc_score, confusion_matrix
+    from sklearn.metrics import (
+        accuracy_score, roc_auc_score, confusion_matrix,
+        precision_score, recall_score, f1_score,
+    )
+    import numpy as np
 
     y_pred = modelo.predict(X_test)
 
     result = {
         'acuracia': accuracy_score(y_test, y_pred),
         'auc': None,
-        'profit_factor': 0,
-        'expectancy': 0,
+        'profit_factor': None,  # Calcular no replay_engine.py
+        'expectancy': None,     # Calcular no replay_engine.py
+        'precision': None,
+        'recall': None,
+        'f1': None,
+        'n_trades_previstos': int(y_pred.sum() if hasattr(y_pred, 'sum') else 0),
     }
 
     if hasattr(modelo, 'predict_proba') and len(set(y_test.tolist())) > 1:
         try:
             y_prob = modelo.predict_proba(X_test)[:, 1]
             result['auc'] = roc_auc_score(y_test, y_prob)
+            # ECE (Expected Calibration Error)
+            bins = np.linspace(0, 1, 11)
+            ece = 0.0
+            for lo, hi in zip(bins[:-1], bins[1:]):
+                mask = (y_prob >= lo) & (y_prob < hi)
+                if mask.sum() > 0:
+                    acc_bin = y_test[mask].mean()
+                    conf_bin = y_prob[mask].mean()
+                    ece += mask.sum() / len(y_test) * abs(acc_bin - conf_bin)
+            result['ece'] = round(float(ece), 4)
         except Exception:
             result['auc'] = None
 
-    if modo == 'binario':
-        cm = confusion_matrix(y_test, y_pred, labels=[0, 1])
-        ganhos = (cm[1, 1] + cm[0, 0]) * tp_pts
-        perdas = (cm[1, 0] + cm[0, 1]) * sl_pts
-        if perdas > 0:
-            result['profit_factor'] = ganhos / perdas
-        result['expectancy'] = (ganhos - perdas) / max(cm.sum(), 1)
-    else:
-        # 3 classes: acertou 1→1 ou -1→-1 = ganhou; errou de lado (1→-1, -1→1)
-        # perde os DOIS lados (TP perdido + SL tomado)
-        cm = confusion_matrix(y_test, y_pred, labels=[-1, 0, 1])
-        acertos = cm[0, 0] + cm[2, 2]
-        inversoes = cm[0, 2] + cm[2, 0]
-        erros = cm.sum() - acertos
-        ganhos = acertos * tp_pts
-        perdas = erros * sl_pts + inversoes * sl_pts
-        result['profit_factor'] = ganhos / max(perdas, 1)
-        result['expectancy'] = (ganhos - perdas) / max(cm.sum(), 1)
+    result['precision'] = round(float(precision_score(y_test, y_pred, zero_division=0)), 4)
+    result['recall'] = round(float(recall_score(y_test, y_pred, zero_division=0)), 4)
+    result['f1'] = round(float(f1_score(y_test, y_pred, zero_division=0)), 4)
 
     return result
 

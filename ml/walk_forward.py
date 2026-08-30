@@ -179,11 +179,19 @@ def main():
     sl_pts = _CFG["trading"].get("sl_pts", 50)
     result = avaliar_modelo(modelo, X_test, y_test, tp_pts=tp_pts, sl_pts=sl_pts)
     print(f'Acuracia:  {result["acuracia"]:.4f}')
-    if result['auc'] is not None:
+    if result.get('auc') is not None:
         print(f'AUC-ROC:   {result["auc"]:.4f}')
-    print(f'Profit Factor: {result["profit_factor"]:.2f}')
-    print(f'Expectancy:    {result["expectancy"]:+.1f} pts')
-    print(f'Total trades:  {result.get("n_trades", "?")}')
+    if result.get('ece') is not None:
+        print(f'ECE:       {result["ece"]:.4f}')
+    if result.get('precision') is not None:
+        print(f'Precision: {result["precision"]:.4f}')
+    if result.get('recall') is not None:
+        print(f'Recall:    {result["recall"]:.4f}')
+    pf = result.get('profit_factor')
+    print(f'Profit Factor: {pf:.2f}' if pf else 'Profit Factor: [replay_engine.py]')
+    exp = result.get('expectancy')
+    print(f'Expectancy:    {exp:+.1f} pts' if exp is not None else 'Expectancy:    [replay_engine.py]')
+    print(f'Total trades previstos: {result.get("n_trades_previstos", "?")}')
 
     imp = feature_importances(modelo, X_cols, top_n=15)
     imp_dict = imp.to_dict() if hasattr(imp, 'to_dict') else dict(imp)
