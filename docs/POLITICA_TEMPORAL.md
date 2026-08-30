@@ -1,9 +1,9 @@
 # Política Temporal — Sistema de Trading AlphaZ
 
 **Data:** 30/08/2026
-**Fases aplicadas:** Fase 1 (Dedup T&T), Fase 2 (Timestamp do Mercado), Fase 3 (Ordenamento Temporal)
+**Fases aplicadas:** Fase 1 (Dedup T&T), Fase 2 (Timestamp do Mercado), Fase 3 (Ordenamento Temporal), Fase 4 (Overflow e Perda de Eventos)
 **Arquivos criados:** `core/temporal.py`, `core/event_ordering.py`
-**Arquivos alterados:** `core/contracts.py`, `adapters/profit_rtd.py`, `adapters/replay.py`, `core/app.py`
+**Arquivos alterados:** `core/contracts.py`, `adapters/profit_rtd.py`, `adapters/replay.py`, `core/app.py`, `core/capture_daemon.py`
 
 ---
 
@@ -293,11 +293,122 @@ O primeiro `RefreshData` absorve todos os trades visíveis como baseline, sem em
 | `test_reset_limpa_estado` | reset zera métricas |
 | `test_reset_permite_reprocessar_duplicatas` | reset permite reemissão |
 
-**Total: 66 testes temporais** (17 + 26 + 23)
+**Total: 85 testes temporais** (17 + 26 + 23 + 19)
 
 ---
 
-## 9. DADOS HISTÓRICOS
+## 9. OVERFLOW E PERDA DE EVENTOS (Fase 4)
+
+### Problema
+
+O `CaptureDaemon` (`core/capture_daemon.py`) usava `put_nowait` para enfileirar eventos. Quando a fila interna (`_MAX_QUEUE = 100.000`) enchia, eventos eram **descartados silenciosamente**:
+
+- `fila_max_atingido` contava **vezes** que a fila encheu, não **quantos eventos** foram perdidos.
+- O log usava `log.warning` (perda de dados tratada como warning, não error).
+- Não havia `data_loss_detected` no `health_check` — o watchdog não conseguia detectar a perda.
+- Não havia watermark (pico da fila) nem backlog (latência de gravação).
+
+### Correção
+
+O `CaptureDaemon` foi reescrito com:
+
+#### 9.1 Contadores detalhados (20 campos)
+
+| Contador | Descrição |
+|----------|-----------|
+| `events_received` | Total de eventos recebidos (negócios + book) |
+| `events_processed` | Total de eventos gravados com sucesso |
+| `events_dropped` | Total de eventos DESCARTADOS por overflow |
+| `events_error` | Total de eventos com erro de gravação |
+| `negocios_recebidos` / `negocios_processados` / `negocios_dropped` / `negocios_erro` | Por tipo (negócios) |
+| `book_recebidos` / `book_processados` / `book_dropped` / `book_erro` | Por tipo (book) |
+| `overflow_count` | Número de vezes que a fila encheu |
+| `watermark_max` | Maior tamanho da fila observado (pico) |
+| `watermark_current` | Tamanho atual da fila |
+| `backlog_ms_max` | Maior latência fila → disco (ms) |
+| `flushes` | Número de flushes para disco |
+| `erros_flush` | Número de erros de flush |
+| `daemon_crashes` | Número de crashes do loop do daemon |
+| `data_loss_detected` | **True** se qualquer evento foi descartado |
+
+#### 9.2 Política de descarte explícita (drop-on-overflow)
+
+Quando a fila está cheia (`_MAX_QUEUE`), novos eventos são **DESCARTADOS**.
+Isso é **explícito e auditável**:
+
+- `log.error` (não `log.warning`) — perda de dados é erro, não warning.
+- `events_dropped` incrementado pelo número exato de eventos perdidos.
+- `data_loss_detected = True` no `health_check`.
+- `last_drop_reason` e `last_drop_ts` registram o motivo e timestamp do último descarte.
+
+#### 9.3 Backpressure mode (opcional)
+
+Se `backpressure=True` no construtor, a thread produtora é **bloqueada** (`put` com timeout de 5s) em vez de descartar. Isso pode causar latência no loop de trading, mas garante que nenhum evento seja perdido.
+
+- **Default:** `backpressure=False` (drop-on-overflow) — prioriza o trading.
+- **Captura histórica:** `backpressure=True` — prioriza integridade dos dados.
+
+#### 9.4 Watermark
+
+O watermark (`watermark_max`) registra o pico da fila — o maior número de eventos que estiveram aguardando gravação em algum momento. É atualizado:
+
+- No loop do daemon (a cada iteração).
+- No `health_check` (quando o dashboard/watchdog consulta).
+
+O watermark **só cresce, nunca diminui** — permite identificar se a fila chegou perto do limite mesmo que já tenha esvaziado.
+
+#### 9.5 Backlog
+
+O backlog (`backlog_ms_max`) mede a latência entre o momento em que um evento é consumido da fila e o momento em que a gravação é concluída. É atualizado a cada evento processado.
+
+#### 9.6 health_check para o watchdog
+
+O `health_check()` retorna:
+
+```python
+{
+    'alive': bool,              # thread do daemon está viva?
+    'queue_size': int,          # tamanho atual da fila
+    'queue_pct': float,        # % da fila usada
+    'watermark_max': int,      # pico histórico da fila
+    'data_loss_detected': bool, # True se eventos foram descartados
+    'started': bool,
+    'shutdown': bool,
+    'stats': dict,              # todos os 20 contadores
+}
+```
+
+O watchdog (ou dashboard) pode verificar `data_loss_detected` e `queue_pct > 80` para identificar condições de overflow.
+
+### Testes (19 testes)
+
+`testes/test_capture_overflow.py`
+
+| Teste | Cenário |
+|-------|---------|
+| `test_fila_cheia_descarta_e_registra` | Fila cheia → descarta + `data_loss_detected=True` |
+| `test_motivo_do_descarte_registrado` | `last_drop_reason` contém motivo |
+| `test_contador_recebidos_vs_processados` | `received > processed` quando há descarte |
+| `test_overflow_detectado_com_produtor_rapido` | 1000 eventos em fila de 5 → overflow |
+| `test_book_snapshot_descartado_com_fila_cheia` | Book descartado com fila cheia |
+| `test_estado_nao_corrompido_apos_overflow` | Daemon continua funcionando após overflow |
+| `test_data_loss_detected_no_health_check` | `health_check` reporta perda |
+| `test_log_error_nao_warning` | Overflow gera `log.error` (não warning) |
+| `test_contadores_somam_corretamente` | `received = processed + dropped + error` |
+| `test_watermark_max_registrado` | Pico da fila registrado |
+| `test_backlog_ms_registrado` | Latência de gravação medida |
+| `test_daemon_sobrevive_a_overflow` | Daemon não morre após overflow |
+| `test_daemon_sobrevive_a_erro_de_gravacao` | Daemon não morre se I/O falha |
+| `test_watermark_atualiza_no_health_check` | `health_check` atualiza watermark |
+| `test_watermark_nao_diminui` | Watermark só cresce |
+| `test_backpressure_nao_descarta` | `backpressure=True` não descarta |
+| `test_drain_grava_eventos_restantes` | Drain no shutdown grava tudo |
+| `test_drain_com_fila_parcial` | Drain com fila parcialmente processada |
+| `test_health_check_para_watchdog` | Campos que o watchdog pode verificar |
+
+---
+
+## 10. DADOS HISTÓRICOS
 
 ### Migração
 
