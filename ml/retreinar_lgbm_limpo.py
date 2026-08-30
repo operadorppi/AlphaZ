@@ -13,8 +13,6 @@ from sklearn.metrics import accuracy_score, roc_auc_score, confusion_matrix
 from datetime import date, datetime
 
 PARQUET_PATH = r'D:\MarketData\mimo\dataset_final.parquet'  # v12.1: pipeline multi-ativo (sem cross-asset)
-# v9.32: dataset enriquecido com ajuste oficial + VWAP + regime
-PARQUET_PATH_COMPL = r'D:\MarketData\mimo\26\dataset_final_completo.parquet'  # fallback antigo (contaminado)
 OLD_MODEL_PATH = r'D:\MarketData\mimo\26\modelo_lgbm_v3.pkl'
 NEW_MODEL_PATH = r'D:\MarketData\mimo\26\modelo_lgbm_v4_limpo.pkl'
 
@@ -60,8 +58,6 @@ def main():
                     help='Dias uteis (CSV) para o gate de qualidade; aborta (exit 2) se algum reprovar')
     ap.add_argument('--save-dir', default=os.environ.get('SINAL_RT_DIR', r'D:\MarketData\mimo'))
     ap.add_argument('--dataset', default=os.environ.get('DATASET_PARQUET', PARQUET_PATH))
-    ap.add_argument('--usar-complemento', action='store_true', default=False,
-                    help='Se o dataset_completo (com VWAP, ajuste, regime) existir, usar')
     ap.add_argument('--modelo-out', default=os.environ.get('ML_MODELO', NEW_MODEL_PATH))
     ap.add_argument('--ativo', default='WINV26')
     args = ap.parse_args()
@@ -97,12 +93,7 @@ def main():
 
     # Carregar dados
     print(f'\nCarregando dataset: {args.dataset}')
-    # v9.32: se --usar-complemento, preferir dataset_final_completo (mais features)
-    if args.usar_complemento and os.path.exists(PARQUET_PATH_COMPL):
-        print(f'  (v9.32: usando dataset enriquecido: {PARQUET_PATH_COMPL})')
-        df = pd.read_parquet(PARQUET_PATH_COMPL)
-    else:
-        df = pd.read_parquet(args.dataset)
+    df = pd.read_parquet(args.dataset)
     df = df[df['ativo'] == args.ativo].copy()
     df['data'] = pd.to_datetime(df['ts_ms'], unit='ms', utc=True).dt.date
     df = df.sort_values('ts_ms').reset_index(drop=True)

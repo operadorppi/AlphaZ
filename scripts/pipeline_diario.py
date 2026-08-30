@@ -236,8 +236,7 @@ def main():
     # 6. Retreino
     print(f'\n[6/6] Retreino do modelo')
     # v9.32: usar dataset enriquecido (com VWAP, ajuste, regime) se existir
-    retrain_args = ['--gate-dias', ','.join(dias_gate), '--save-dir', save_dir, '--ativo', ATIVO,
-                    '--usar-complemento']
+    retrain_args = ['--gate-dias', ','.join(dias_gate), '--save-dir', save_dir, '--ativo', ATIVO]
     run('ml/retreinar_lgbm_limpo.py',
         retrain_args,
         log_file, 6, 'Retreino (retreinar_lgbm_limpo)', dry_run=args.dry_run)
