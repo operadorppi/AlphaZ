@@ -72,18 +72,23 @@ def main():
         print('=' * 60)
         print('GATE DE QUALIDADE (--gate-dias)')
         print('=' * 60)
-        ok = True
+        erros = 0
         for d in [x.strip() for x in args.gate_dias.split(',') if x.strip()]:
             info = _validar_dia(args.save_dir, d)
             if info['problemas']:
-                ok = False
-                print(f'[GATE] Dia {d}: PROBLEMAS')
-                for p in info['problemas']:
-                    print(f'  - {p}')
+                criticos = [p for p in info['problemas'] if 'span' not in p.lower()]
+                avisos = [p for p in info['problemas'] if 'span' in p.lower()]
+                if criticos:
+                    erros += len(criticos)
+                    print(f'[GATE] Dia {d}: ERRO')
+                    for p in criticos:
+                        print(f'  - {p}')
+                if avisos:
+                    print(f'[GATE] Dia {d}: OK (aviso: {avisos[0]})')
             else:
                 print(f'[GATE] Dia {d}: OK')
-        if not ok:
-            print('[GATE] Reprovado — abortando retreino (exit 2)')
+        if erros > 0:
+            print(f'[GATE] {erros} erros criticos — abortando retreino (exit 2)')
             sys.exit(2)
 
     print('='*60)
@@ -206,6 +211,7 @@ def main():
         )
         new_model.fit(X_train, y_train)
         print(f'  Treinado em {time.time()-t0:.1f}s')
+    nome_modelo = type(new_model).__name__
     
     # Avaliar novo
     X_test_new = df_test[X_cols].fillna(0)

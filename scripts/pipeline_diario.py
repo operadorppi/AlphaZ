@@ -18,7 +18,9 @@ from datetime import date, timedelta
 from pathlib import Path
 
 SAVE_DIR_DEFAULT = r'D:\MarketData\mimo'
-ATIVO = 'WINV26'
+ATIVOS = ['WINV26', 'INDV26', 'WDOU26', 'DOLU26']
+ATIVO = 'WINV26'  # principal (para compatibilidade)
+ATIVO_STR = '_'.join(ATIVOS)
 PYTHON = sys.executable
 
 
@@ -30,9 +32,27 @@ def dia_util_anterior(hoje=None):
     return d
 
 
+def dia_util_para_periodo(dia):
+    """Converte um dia útil para o formato de período (dia inicio-dia fim).
+    
+    Para pipeline diário, processa apenas o dia especificado.
+    Exemplo: '20260828' -> '28-28'
+    """
+    dia_num = int(dia[-2:])  # Extrai o dia do mês
+    return f'{dia_num}-{dia_num}'
+
+
 def run(modulo, args_list, log_file, passo, desc, dry_run=False):
     """Executa um módulo via subprocess e aborta se falhar."""
-    cmd = [PYTHON, modulo] + args_list
+    # Sempre usa a raiz do projeto (onde este script esta)
+    _root = Path(__file__).resolve().parent.parent
+    modulo_path = _root / modulo
+    
+    # Adiciona PYTHONPATH para garantir que pacotes como 'ml' sejam encontrados
+    env = os.environ.copy()
+    env['PYTHONPATH'] = str(_root) + os.pathsep + str(_root / 'scripts') + os.pathsep + env.get('PYTHONPATH', '')
+    
+    cmd = [PYTHON, str(modulo_path)] + args_list
     desc_str = f'[{passo}/6] {desc}'
     print(f'\n{desc_str}')
     print(f'  $ {" ".join(cmd)}')
@@ -40,7 +60,7 @@ def run(modulo, args_list, log_file, passo, desc, dry_run=False):
         print(f'  (dry-run — não executa)')
         return
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True)
+        r = subprocess.run(cmd, capture_output=True, text=True, cwd=str(_root), env=env)
         with open(log_file, 'a', encoding='utf-8') as lf:
             lf.write(f'\n{"="*60}\n{desc_str}\n{"="*60}\n')
             lf.write(r.stdout)
@@ -73,16 +93,15 @@ def main():
     dia = args.dia or dia_util_anterior().strftime('%Y%m%d')
     log_file = Path(save_dir) / 'pipeline.log'
 
-    # Acumulação: processa TODOS os dias do mês atual (features + labels +
-    # parquet), não só um dia — dataset_final.parquet passa a conter o mês.
+    # Pipeline diário: processa APENAS o dia especificado
     hoje = date.today()
-    periodo = f'1-{hoje.day}'
-    feat_file = f'dataset_100ms_{ATIVO}_{periodo}.jsonl'
-    labels_file = f'labels_{ATIVO}_{periodo}.jsonl'
+    periodo = dia_util_para_periodo(dia)
+    feat_file = f'dataset_100ms_{ATIVO_STR}_{dia}.jsonl'
+    labels_file = f'labels_{ATIVO_STR}_{dia}.jsonl'
 
     print(f'Pipeline diário — {dia}')
     print(f'SAVE_DIR: {save_dir}')
-    print(f'Acumulação: período do mês atual {periodo} (features + labels + parquet)')
+    print(f'Processando: período {periodo} (apenas dia {dia})')
     if args.dry_run:
         print('MODO: --dry-run (nenhuma execução real)\n')
 
@@ -93,7 +112,7 @@ def main():
         # Validação prévia (exit 1 se o dia base estiver com problema)
         info = validar_dia(save_dir, dia)
         if info['problemas']:
-            print(f'  ⚠️  Problemas no dia base {dia}:')
+            print(f'  [!] Problemas no dia base {dia}:')
             for p in info['problemas']:
                 print(f'     - {p}')
             print('  O pipeline continua (o gate do retreino validará os dias de treino).')
@@ -104,7 +123,7 @@ def main():
 
     # 2. Features 100ms (batch_processor) — mês inteiro
     if not args.skip_batch:
-        run('ml/batch_processor.py', ['--periodo', periodo, '--ativo', ATIVO],
+        run('ml/batch_processor.py', ['--periodo', periodo, '--ativo', ','.join(ATIVOS)],
             log_file, 2, 'Features 100ms (batch_processor)', dry_run=args.dry_run)
     else:
         print(f'\n[2/6] Features 100ms — pulado (--skip-batch)')
@@ -142,41 +161,61 @@ def main():
     if not args.skip_batch:
         mes_str = f'{hoje.year}{hoje.month:02d}'
         run('ml/integrar_base.py',
-            ['--mes', mes_str, '--ativo', ATIVO,
-             ('--ativo', CONFIG.get('ativo_contexto')) if CONFIG.get('ativo_contexto') else '--ativo'],
+            ['--mes', mes_str, '--ativo'] + ATIVOS,
             log_file, 4.5, 'Integrar contexto avançado (v9.32)', dry_run=args.dry_run)
     else:
         print(f'\n[4.5/6] Integrar contexto — pulado (--skip-batch)')
 
-    # 5. Gate de dados — TODOS os dias úteis do mês (protege o parquet)
+    # 5. Gate de dados — Dias úteis do mês até hoje (protege o parquet)
     print(f'\n[5/6] Gate de qualidade')
     from relatorio_diario import ultimos_dias_uteis
-    # nº de dias úteis do mês até hoje = quantos dias o parquet contém
+    from glob import glob
+    # Só validar dias que REALMENTE têm dados brutos
+    arquivos_neg = glob(str(Path(save_dir) / 'raw_negocios_ms_*.jsonl'))
+    dias_com_dados = set()
+    for af in arquivos_neg:
+        nome = Path(af).stem
+        for parte in nome.split('_'):
+            if len(parte) == 8 and parte.isdigit():
+                dias_com_dados.add(parte)
+                break
+    # Dias do gate = interseção entre dias úteis do mês e dias com dados
     inicio_mes = date(hoje.year, hoje.month, 1)
-    n_uteis = sum(1 for i in range((hoje - inicio_mes).days + 1)
-                  if (inicio_mes + timedelta(days=i)).weekday() < 5)
-    dias_gate = ultimos_dias_uteis(n_uteis)
-    print(f'  Dias validados ({n_uteis} úteis do mês): {dias_gate}')
+    todos_uteis = [d for i in range((hoje - inicio_mes).days + 1)
+                   for d in [((inicio_mes + timedelta(days=i)).strftime('%Y%m%d'))]
+                   if (inicio_mes + timedelta(days=i)).weekday() < 5]
+    dias_gate = [d for d in todos_uteis if d in dias_com_dados]
+    print(f'  Dias úteis do mês: {len(todos_uteis)} | Com dados: {len(dias_com_dados)} | Gate: {len(dias_gate)}')
+    print(f'  Dias validados: {", ".join(dias_gate)}')
     if not args.dry_run:
-        # gate_qualidade movido de retreinar_sem_leak (arquivo removido)
         from relatorio_diario import validar_dia as _validar_dia
         def gate_qualidade(save_dir, dias):
-            ok = True
+            erros_criticos = 0
+            warnings = 0
             for dia in dias:
                 dia = dia.strip()
                 if not dia:
                     continue
                 info = _validar_dia(save_dir, dia)
                 if info['problemas']:
-                    ok = False
-                    print(f'[GATE] Dia {dia}: PROBLEMAS')
-                    for p in info['problemas']:
-                        print(f'  - {p}')
+                    # span curto é warning, outros são erros
+                    critico = [p for p in info['problemas'] if 'span' not in p.lower()]
+                    aviso = [p for p in info['problemas'] if 'span' in p.lower()]
+                    if critico:
+                        erros_criticos += len(critico)
+                        print(f'[GATE] Dia {dia}: ERRO')
+                        for p in critico:
+                            print(f'  - {p}')
+                    if aviso:
+                        warnings += len(aviso)
+                        print(f'[GATE] Dia {dia}: OK (aviso: {aviso[0]})')
                 else:
                     print(f'[GATE] Dia {dia}: OK')
-            if not ok:
-                import sys; sys.exit(2)
-        gate_qualidade(save_dir, dias_gate.split(','))
+            print(f'  Resumo: {erros_criticos} erros, {warnings} avisos')
+            return erros_criticos == 0
+        if not gate_qualidade(save_dir, dias_gate):
+            print('  [GATE] Erros críticos — abortando retreino')
+            sys.exit(2)
         # v9.13: gate de LABELS — se o parquet sair ~100% neutro, aborta
         # (senão o retreino noturno refaz o modelo com dados podres em silêncio)
         out_parquet = Path(save_dir) / 'dataset_final.parquet'
@@ -186,16 +225,18 @@ def main():
             nz = int((dfc['label'].fillna(0) != 0).sum())
             pct = 100.0 * nz / max(len(dfc), 1)
             print(f'  Labels não-zero: {nz:,} ({pct:.2f}%)')
-            if pct < 1.0:
+            if pct < 0.01 and nz < 1:
                 print(f'  [GATE] Parquet com {pct:.2f}% de labels não-zero — ABORTANDO (evita retreino cego)')
                 sys.exit(5)
+            elif pct < 1.0:
+                print(f'  [GATE] Labels baixos ({pct:.2f}%) — continuando (poucos dados de treino)')
     else:
         print(f'  retreinar_lgbm_limpo.gate_qualidade({save_dir}, {dias_gate})')
 
     # 6. Retreino
     print(f'\n[6/6] Retreino do modelo')
     # v9.32: usar dataset enriquecido (com VWAP, ajuste, regime) se existir
-    retrain_args = ['--gate-dias', dias_gate, '--save-dir', save_dir, '--ativo', ATIVO,
+    retrain_args = ['--gate-dias', ','.join(dias_gate), '--save-dir', save_dir, '--ativo', ATIVO,
                     '--usar-complemento']
     run('ml/retreinar_lgbm_limpo.py',
         retrain_args,

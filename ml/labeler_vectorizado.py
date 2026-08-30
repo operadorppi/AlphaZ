@@ -336,16 +336,16 @@ def processar_jsonl(input_path, output_path, ativo_filter=None,
         lab = int(labels[i])
         outcome = 'TP' if lab == TP_VALUE else ('SL' if lab == SL_VALUE else 'TIMEOUT')
         labels_out.append({
-            'ts_ms': int(ts_arr[i]),
+            'ts_ms': int(resultado['ts_ms'][i]),
             'label': lab,
             'outcome': outcome,
             'tp_atingido': bool(resultado['tp_atingido'][i]),
             'sl_atingido': bool(resultado['sl_atingido'][i]),
-            'preco_entrada': float(precos_arr[i]),
+            'preco_entrada': float(resultado['preco_entrada'][i]),
             'preco_saida': float(resultado['preco_saida'][i]),
             'duracao_ms': int(resultado['duracao_ms'][i]),
             'retorno_pts': float(resultado['retorno_pts'][i]),
-            'ativo': str(ativos_arr[i]),
+            'ativo': str(resultado['ativo'][i]),
         })
 
     output = Path(output_path)

@@ -232,6 +232,7 @@ class GeradorJanelas:
         while ts_ms >= self._proximo_corte:
             for a, ja in self.janelas.items():
                 snap = ja.snapshot(self._proximo_corte)
+                snap['ts_ms'] = self._proximo_corte
                 if a in self._ultimo_book:
                     snap['book'] = self._ultimo_book[a]
                 if a in self.vp_trackers and a in self._ultimo_preco:
