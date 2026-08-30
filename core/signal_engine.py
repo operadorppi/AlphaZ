@@ -259,15 +259,13 @@ class SignalEngine:
         estrategia = result[2] if len(result) > 2 else {}
 
         # ============================================================
-        # ML como FILTRO PRIMÁRIO (Fase 11 v2)
-        # Fluxo: ML gate → heurística confirma → sinal combinado
-        # Se ML não está disponível, fallback para heurística pura.
+        # ML como FILTRO PRIMÁRIO (v12.2 — simplificado)
+        # Regra: ML decide. Heurística não pode sobrepor.
         # ============================================================
         ml_prob = 0.5
+        ml_dir = 0  # +1=C, -1=V, 0=neutro
         ml_available = False
-        ml_gate_pass = True  # Se ML não disponível, gate passa (fallback)
-        ml_decision = None
-        
+
         if hasattr(self, 'scorer') and self.scorer:
             try:
                 prob_dict = getattr(self.scorer, 'prob', {})
@@ -276,82 +274,49 @@ class SignalEngine:
                     if isinstance(val, (int, float)) and not math.isnan(val):
                         ml_prob = float(val)
                         ml_available = True
+
+                        # Calibração: prob → direção + threshold
                         regime_str = f.get('regime', 'lateral')
-                        
-                        # Decisão calibrada: probabilidade → direção + threshold
                         ml_decision = self.calibration.separate(
                             ml_prob=ml_prob,
                             regime=regime_str,
                             confianca=self.confianca_ewma,
                             score_heuristico=score,
                         )
-                        
                         calibrated = ml_decision['model_probability']
-                        ml_dir_str = ml_decision['trading_decision']  # 'C', 'V' ou ''
+                        ml_dir_str = ml_decision['trading_decision']  # 'C', 'V', ''
                         threshold = ml_decision.get('threshold', 0.5)
-                        
-                        # --- GATE: ML decide se há edge ---
-                        if not ml_dir_str:
-                            # Zona de incerteza → não trade
-                            ml_gate_pass = False
-                            motivos.append(f'ML_GATE_BLOCK (p={calibrated:.3f}, th={threshold:.3f})')
+
+                        ml_dir = 1 if ml_dir_str == 'C' else (-1 if ml_dir_str == 'V' else 0)
+
+                        if ml_dir == 0:
+                            # Zona de incerteza — ML bloqueia
+                            motivos.append(f'ML_BLOCK (p={calibrated:.3f}, th={threshold:.3f})')
                         else:
-                            motivos.append(f'ML={calibrated:.2f}(th={threshold:.3f})')
+                            motivos.append(f'ML_DIR={ml_dir_str} (p={calibrated:.3f})')
             except Exception as e:
                 log.warning(f"[SIGNAL] Erro ML scorer: {e}")
 
-        # --- Sinal: ML gate + heurística (peso dinâmico por calibração) ---
+        # --- Decisão final ---
         sinal = 0
         lado_heur = lado  # direção da heurística (aggr_imb)
-        
-        # v11.13: Peso ML vs Heurística é DINÂMICO baseado no ECE
-        # ECE alto (ruim) → ML menos confiável → heurística pesa mais
-        # ECE baixo (bom) → ML confiável → ML domina
-        ece = 0.0
-        if hasattr(self, 'calibration') and hasattr(self.calibration, 'calibrator'):
-            ece = getattr(self.calibration.calibrator, 'brier_score', 0.0)
-        ml_weight = 0.5  # default: peso igual
-        if ece > 0.15:
-            ml_weight = 0.3   # ECE ruim: heurística domina
-            motivos.append(f'ECE={ece:.3f}(ruim)')
-        elif ece > 0.05:
-            ml_weight = 0.5   # ECE ok: peso igual
-        elif ece > 0:
-            ml_weight = 0.7   # ECE bom: ML domina
-            motivos.append(f'ECE={ece:.3f}(bom)')
-        
-        if ml_available and ml_decision:
-            ml_dir = 1 if ml_decision['trading_decision'] == 'C' else (
-                -1 if ml_decision['trading_decision'] == 'V' else 0)
-            
-            if ml_gate_pass:
-                # ML diz que há edge — combinar com heurística
-                if lado_heur == ml_dir:
-                    # Concordância: peso maior
-                    sinal = ml_dir
-                    score = abs(score) * (1.0 + ml_weight)
-                    motivos.append(f'ML_HEUR_OK (w={ml_weight:.1f})')
-                elif ml_weight >= 0.6 and abs(score) < 0.3:
-                    # ML forte, heurística fraca → ML domina
-                    sinal = ml_dir
-                    score = abs(score) * 0.8
-                    motivos.append(f'ML_DOMINA (w={ml_weight:.1f})')
-                elif score > 0.5 and ml_weight < 0.5:
-                    # Heurística forte, ML fraco → heurística domina
-                    sinal = lado_heur
-                    score = abs(score) * 1.2
-                    motivos.append(f'HEUR_DOMINA (w={1-ml_weight:.1f})')
-                else:
-                    motivos.append(f'ML_HEUR_DISCORDAM (w={ml_weight:.1f})')
+
+        if ml_available:
+            # ML disponível: ML é o gate
+            if ml_dir == 0:
+                sinal = 0  # ML bloqueou — não trade, independente da heurística
+            elif ml_dir == lado_heur:
+                sinal = ml_dir  # ML e heurística concordam
+                motivos.append('ML+HEUR_OK')
             else:
-                # ML bloqueou — heurística sozinha NÃO gera sinal
-                motivos.append('ML_BLOQUEOU')
+                sinal = 0  # Discordam — não trade (heurística não pode sobrepor ML)
+                motivos.append('ML_HEUR_DISCORD')
         else:
-            # Fallback: sem ML, heurística pura (modo legado)
+            # Fallback: sem ML, heurística pura (modo legado/desenvolvimento)
             if score > 0.5:
                 sinal = lado_heur
             else:
-                motivos.append('fluxo fraco')
+                motivos.append('HEUR_FRACO')
 
         # Persistência do sinal
         if sinal != 0 and sinal == self._sinal_anterior_bruto:
@@ -369,6 +334,8 @@ class SignalEngine:
         else:
             self.confianca_ewma = (1 - alpha) * self.confianca_ewma + alpha * abs(score)
 
+        # v12.0: Unificar confiança — usar EWMA em ambos os lugares
+        # Signal.confianca e PositionManager.confianca_ewma devem ser o mesmo valor
         conf = min(abs(score) / 3.0, 1.0)
 
         # TP/SL

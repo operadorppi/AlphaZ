@@ -151,30 +151,69 @@ class App:
         log.info(f"[APP] Inicializado: {self.ativo_principal} × {self.ativo_contexto}")
 
     def _verificar_replay_gate(self):
-        """Verifica se o replay de validacao foi aprovado.
-        Retorna True se aprovado ou se gate nao e obrigatorio."""
+        """Verifica se o replay do último dia capturado aprovou o modelo.
+
+        Regras de go/no-go:
+          - PF > 1.2  (lucro médio por trade > perda média)
+          - Win rate > 45%
+          - Max drawdown > -200 pts/dia
+          - Número de trades >= 3 (estatisticamente relevante)
+
+        Se o replay não foi rodado ou não passou nos critérios,
+        o motor opera em modo CAPTURA PURA (grava dados, não trade).
+
+        Returns:
+            True se aprovado, False se bloqueado
+        """
         exigir = self.config.get('exigir_replay_validado', False)
         if not exigir:
+            log.info('[REPLAY-GATE] Gate nao obrigatorio — trading habilitado')
             return True
-        resultado_path = Path(self.save_dir) / 'replay_resultado.json'
-        if not resultado_path.exists():
-            log.warning('[REPLAY-GATE] replay_resultado.json nao encontrado — motor bloqueado')
+
+        REPLAY_JSON = Path(self.save_dir) / 'replay_resultado.json'
+
+        if not REPLAY_JSON.exists():
+            log.warning('[REPLAY-GATE] Nenhum replay encontrado. Modo CAPTURA PURA.')
+            log.warning('[REPLAY-GATE] Rode: python replay_engine.py --modo validacao --dias 3')
             return False
+
         try:
-            with open(resultado_path, encoding='utf-8') as f:
-                resultado = json.load(f)
-            aprovado = resultado.get('aprovado', False)
-            if aprovado:
-                log.info(f'[REPLAY-GATE] APROVADO — PF={resultado.get("pf_medio", 0):.2f}, '
-                         f'WR={resultado.get("wr_medio", 0):.1%}, '
-                         f'DD={resultado.get("dd_dia_medio", 0):.0f}')
-            else:
-                log.warning(f'[REPLAY-GATE] REPROVADO — motor bloqueado')
-                log.warning(f'  Rodar: python replay_engine.py --modo validacao --dias 3')
-            return aprovado
+            with open(REPLAY_JSON, encoding='utf-8') as f:
+                replay = json.load(f)
         except Exception as e:
-            log.warning(f'[REPLAY-GATE] Erro ao ler resultado: {e}')
+            log.error(f'[REPLAY-GATE] Erro ao ler replay: {e}. Modo CAPTURA PURA.')
             return False
+
+        # Extrair métricas (suporta ambos os formatos: replay_resultado.json e replay_ultimo_dia.json)
+        pf = replay.get('profit_factor', replay.get('pf_medio', 0))
+        wr = replay.get('win_rate', replay.get('wr_medio', 0))
+        max_dd = replay.get('max_drawdown_pts', replay.get('dd_dia_medio', 0))
+        n_trades = replay.get('n_trades', replay.get('total_trades', replay.get('n_trades_medio', 0)))
+
+        log.info(f'[REPLAY-GATE] Último replay: PF={pf:.2f}, WR={wr:.1%}, '
+                 f'MaxDD={max_dd:.0f}pts, N={n_trades}')
+
+        # Critérios
+        checks = [
+            ('PF > 1.2', pf > 1.2),
+            ('Win rate > 45%', wr > 0.45),
+            ('Max DD > -200', max_dd > -200),
+            ('N trades >= 3', n_trades >= 3),
+        ]
+
+        for nome, ok in checks:
+            status = 'OK' if ok else 'FAIL'
+            log.info(f'[REPLAY-GATE]   [{status}] {nome}')
+
+        aprovado = all(ok for _, ok in checks)
+
+        if aprovado:
+            log.info('[REPLAY-GATE] APROVADO — Trading habilitado')
+        else:
+            log.warning('[REPLAY-GATE] BLOQUEADO — Modo CAPTURA PURA')
+            log.warning('[REPLAY-GATE] Corrija o modelo/sinal e rode o replay novamente')
+
+        return aprovado
 
     def _carregar_scorer(self):
         modelo_path = self.config.get('ml_modelo', '')
@@ -182,7 +221,7 @@ class App:
             log.info('[ML] Sem modelo treinado — usando apenas heuristica')
             return
         if not os.path.exists(modelo_path) and not str(modelo_path).startswith('/fake'):
-            log.info('[ML] Sem modelo treinado — usando apenas heuristica')
+            log.info(f'[ML] Modelo nao existe: {modelo_path} — usando apenas heuristica')
             return
         try:
             scorer_mod = None
@@ -212,6 +251,17 @@ class App:
             if self.ativo_contexto:
                 ativos.append(self.ativo_contexto)
             self.scorer = ScorerML(modelo_path, ativos)
+            
+            # v12.2: Validar integridade do modelo carregado
+            if self.scorer:
+                if not hasattr(self.scorer, 'modelo'):
+                    log.error('[APP] Scorer carregado sem atributo modelo — removendo')
+                    self.scorer = None
+                elif not hasattr(self.scorer.modelo, 'predict_proba'):
+                    log.error('[APP] Modelo não tem predict_proba — removendo')
+                    self.scorer = None
+                else:
+                    log.info(f'[APP] Modelo validado: {len(self.scorer.features)} features, classes={self.scorer.modelo.classes_.tolist() if hasattr(self.scorer.modelo, "classes_") else "N/A"}')
             self.signal.scorer = self.scorer
             log.info(f'[ML] Scorer carregado: {modelo_path}')
         except Exception as e:
@@ -333,7 +383,11 @@ class App:
             seg = trade.timestamp_ms // 1000
             sig: Signal = self.signal.calcular(seg, skip_avaliar=False)
             
-            # 5. Acoplamento com PositionManager (Execução)
+            # 5. Replay gate: se não aprovado, modo CAPTURA PURA (não trade)
+            if not self._replay_aprovado:
+                return  # Grava dados (passo 2 já fez), não processa sinais/trading
+            
+            # 6. Acoplamento com PositionManager (Execução)
             if sig and trade.symbol == self.ativo_principal:
                 # v10.15: Utiliza o objeto Signal tipado
                 self.position.confianca_ewma = sig.confianca

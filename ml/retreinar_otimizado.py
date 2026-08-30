@@ -246,7 +246,12 @@ def main():
         acc = 0.0  # não aplicável
         auc = 0.0  # não aplicável
         ece = 0.0  # não aplicável
-        pf = pnl_total / max(abs(pnlSaida), 1) if pnlSaida != 0 else 0
+        # NOTA: PF (Profit Factor) NÃO é calculado aqui.
+        # O PF só pode ser medido via simulação de execução real no
+        # replay_engine.py, com regras de 1 trade por vez, TP/SL,
+        # slippage e custo. FP/FN neste contexto são previsões
+        # erradas, não trades perdidos.
+        pf = None
     else:
         # CLASSIFICAÇÃO: métricas de classificação
         y_prob = modelo.predict_proba(X_test)[:, 1]
@@ -259,14 +264,17 @@ def main():
         cm = confusion_matrix(y_test, y_pred)
         tn, fp, fn, tp = cm.ravel()
         
-        ganhos = tp * 50
-        perdas = (fp + fn) * 30
-        pf = ganhos / perdas if perdas > 0 else 0.0
+        # NOTA: PF (Profit Factor) NÃO é calculado aqui.
+        # O PF só pode ser medido via simulação de execução real no
+        # replay_engine.py ou simular_pnl.py, com regras de 1 trade por
+        # vez, TP/SL, slippage e custo.
+        # FP/FN neste contexto são previsões erradas, não trades perdidos.
+        pf = None
         
         print(f'\n  Accuracy:  {acc:.4f}')
         print(f'  AUC:       {auc:.4f}')
         print(f'  ECE:       {ece:.4f}')
-        print(f'  Profit F.: {pf:.2f}')
+        print(f'  PF:        [calcular no replay_engine.py]')
         print(f'  Trades:    {tp + fp} (TP={tp}, FP={fp}, FN={fn}, TN={tn})')
     
     # Feature importance
@@ -316,7 +324,7 @@ def main():
             'accuracy': round(acc, 4),
             'auc_roc': round(auc, 4),
             'ece': round(ece, 4),
-            'profit_factor': round(pf, 2),
+            'profit_factor': None,  # Calculado no replay, não no treino
             'pnl_total': round(pnl_total, 1) if regression_mode else None,
         },
     }

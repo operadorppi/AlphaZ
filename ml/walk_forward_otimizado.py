@@ -1,15 +1,20 @@
 #!/usr/bin/env python3
-# walk_forward_otimizado.py - Walk-forward OTIMIZADO (v9.38)
-# Otimizacoes: n_jobs=-1, feature_cache, float32, baselines vetorizados
+# walk_forward_otimizado.py - Walk-forward HONESTO (v12.2)
+#
+# SO metricas de QUALIDADE do modelo (sem simulacao de P&L):
+#   - AUC (discriminacao)
+#   - ECE (Expected Calibration Error)
+#   - Precision/Recall por threshold
+#   - Calibration curve
+#
+# A simulacao de P&L com regras reais (1 trade por vez, TP/SL, reentrada)
+# deve ser feita no replay_engine.py.
 #
 #  - treino SEMPRE antes do teste (folds expansivos, min 3 dias de treino)
 #  - purge (30s) + embargo (30s) na fronteira treino/teste
-#  - target binario TP-vs-nao-TP (label == 1) - framing do AUC 0.66
+#  - target binario TP-vs-nao-TP (label == 1)
 #  - modelo: LightGBM (fallback RandomForest), seed fixo
-#  - metricas POR DIA, custo 5 pts WIN, thresholds 0.5 / 0.6 / 0.7
-#  - baselines: B1 threshold=0, B2 aleatorio (30 seeds, mesmo n de trades),
-#    B3 momentum (delta_preco_janela > 0)
-# Saida: walk_forward_v914_limpo.json
+# Saida: walk_forward_v950.json
 import io
 import json
 import os
@@ -33,12 +38,10 @@ except ImportError:
 PATH = 'D:/MarketData/mimo/dataset_final.parquet'  # v12.1: pipeline multi-ativo
 PATH_COMPL = None  # v11.20: nao usar completo (contaminado)
 OUT = 'walk_forward_v950.json'
-COSTO = 5.0
 PURGE_S = 30
 EMBARGO_S = 30
 SEED = 42
 THRESHOLDS = [0.5, 0.6, 0.7]
-THRESH_PRINCIPAL = 0.6
 MIN_TREINO_DIAS = 3
 
 PROIBIDAS = ['label', 'saida', 'retorno', 'duracao', 'atingido', 'ts_ms',
@@ -47,25 +50,18 @@ PROIBIDAS = ['label', 'saida', 'retorno', 'duracao', 'atingido', 'ts_ms',
              'dias_ate_venc', 'duracao_label_ms']
 
 
-def metricas(ret_arr, custo):
-    ret_arr = np.asarray(ret_arr).ravel()
-    if ret_arr is None or len(ret_arr) == 0:
-        return {'n_trades': 0, 'total_pts': 0.0, 'expectancy': 0.0,
-                'pf': None, 'winrate': 0.0, 'dd_pts': 0.0}
-    net = ret_arr - custo
-    wins = net[net > 0].sum() if (net > 0).any() else 0.0
-    losses = -net[net < 0].sum() if (net < 0).any() else 0.0
-    pf = (wins / losses) if losses > 0 else None
-    cum = np.cumsum(net)
-    dd = float((cum - np.maximum.accumulate(cum)).min())
-    return {
-        'n_trades': int(len(net)),
-        'total_pts': round(float(net.sum()), 2),
-        'expectancy': round(float(net.mean()), 4),
-        'pf': round(float(pf), 4) if pf is not None else None,
-        'winrate': round(float((net > 0).mean()), 4),
-        'dd_pts': round(dd, 2),
-    }
+def _ece(y_true, y_prob, n_bins=10):
+    """Expected Calibration Error."""
+    bins = np.linspace(0, 1, n_bins + 1)
+    ece = 0.0
+    for lo, hi in zip(bins[:-1], bins[1:]):
+        mask = (y_prob >= lo) & (y_prob < hi)
+        if mask.sum() == 0:
+            continue
+        acc = y_true[mask].mean()
+        conf = y_prob[mask].mean()
+        ece += mask.sum() / len(y_true) * abs(acc - conf)
+    return round(float(ece), 4)
 
 
 def run():
@@ -83,8 +79,7 @@ def run():
     faltando = [f for f in feat_cols if f not in todas]
     if faltando:
         raise SystemExit('features do modelo ausentes no parquet: %s' % faltando)
-    _COLS = list(dict.fromkeys(['ts_ms', 'label', 'retorno_pts',
-                               'delta_preco_janela'] + feat_cols))
+    _COLS = list(dict.fromkeys(['ts_ms', 'label'] + feat_cols))
     def _load_data(_df=None):
         if _df is None:
             _df = pq.read_table(_path, columns=_COLS).to_pandas()
@@ -112,8 +107,6 @@ def run():
     Xcols = list(Xfull.columns)
     Xarr = Xfull.to_numpy()
     y = (df['label'].to_numpy() == 1).astype(np.int8)
-    ret = df['retorno_pts'].to_numpy().astype(np.float32)
-    delta = df['delta_preco_janela'].to_numpy().astype(np.float32)
     print('linhas:', len(df), '| features:', len(Xcols), flush=True)
 
     try:
@@ -162,48 +155,42 @@ def run():
 
         prob = clf.predict_proba(Xarr[te_mask])[:, 1]
         y_te = y[te_mask]
-        r_te = ret[te_mask]
-        d_te = delta[te_mask]
         n_te = int(te_mask.sum())
         n_unicos = len(np.unique(y_te))
 
-        # modelo em varios thresholds
-        modelo_por_thr = {}
-        for thr in THRESHOLDS:
-            sel = prob >= thr
-            modelo_por_thr[str(thr)] = metricas(r_te[sel], COSTO)
-        m_princ = modelo_por_thr[str(THRESH_PRINCIPAL)]
-        n_alvo = m_princ['n_trades']
-
-        # auc (independente de threshold)
+        # AUC (independente de threshold)
         auc = round(float(roc_auc_score(y_te, prob)), 4) if n_unicos > 1 else None
 
-        # baseline 1: entra em tudo
-        b1 = metricas(r_te, COSTO)
+        # ECE (calibracao)
+        ece = _ece(y_te.astype(float), prob)
 
-        # baseline 3: momentum
-        b3 = metricas(r_te[d_te > 0], COSTO)
+        # Precision/Recall por threshold
+        from sklearn.metrics import precision_score, recall_score
+        metrics_por_thr = {}
+        for thr in THRESHOLDS:
+            y_pred = (prob >= thr).astype(int)
+            n_pred_pos = int(y_pred.sum())
+            if n_pred_pos == 0:
+                metrics_por_thr[str(thr)] = {'n_pred_pos': 0, 'precision': None, 'recall': None}
+            else:
+                metrics_por_thr[str(thr)] = {
+                    'n_pred_pos': n_pred_pos,
+                    'precision': round(float(precision_score(y_te, y_pred, zero_division=0)), 4),
+                    'recall': round(float(recall_score(y_te, y_pred, zero_division=0)), 4),
+                }
 
-        # baseline 2: aleatorio com mesmo n de trades (30 seeds)
-        if n_alvo > 0 and n_alvo <= len(r_te):
-            rngs = np.random.default_rng(SEED)
-            all_idx = np.array([rngs.choice(len(r_te), size=n_alvo, replace=False) for _ in range(30)])
-            all_rets = r_te[all_idx] - COSTO
-            exps = all_rets.mean(axis=1)
-            tots = all_rets.sum(axis=1)
-            b2 = {
-                'n_trades': n_alvo,
-                'expectancy_media': round(float(np.mean(exps)), 4),
-                'total_pts_medio': round(float(np.mean(tots)), 2),
-                'total_pts_min': round(float(np.min(tots)), 2),
-                'total_pts_max': round(float(np.max(tots)), 2),
-                'fracao_seeds_atras_do_modelo':
-                    round(float(np.mean(np.array(tots) < m_princ['total_pts'])), 3),
+        # Calibration curve
+        cal_bins = {}
+        bin_edges = np.linspace(0, 1, 11)
+        for lo, hi in zip(bin_edges[:-1], bin_edges[1:]):
+            mask = (prob >= lo) & (prob < hi)
+            if mask.sum() == 0:
+                continue
+            cal_bins[f'{lo:.1f}-{hi:.1f}'] = {
+                'predicted': round(float(prob[mask].mean()), 4),
+                'observed': round(float(y_te[mask].mean()), 4),
+                'count': int(mask.sum()),
             }
-        else:
-            b2 = {'n_trades': 0, 'expectancy_media': 0.0, 'total_pts_medio': 0.0,
-                  'total_pts_min': 0.0, 'total_pts_max': 0.0,
-                  'fracao_seeds_atras_do_modelo': 0.0}
 
         t_fold_end = time.time()
         folds.append({
@@ -213,30 +200,34 @@ def run():
             'n_treino': int(tr_mask.sum()),
             'n_teste': n_te,
             'auc': auc,
-            'n_sinais': {k: v['n_trades'] for k, v in modelo_por_thr.items()},
-            'modelo_por_threshold': modelo_por_thr,
-            'baseline_threshold0': b1,
-            'baseline_aleatorio30': b2,
-            'baseline_momentum': b3,
+            'ece': ece,
+            'metrics_por_threshold': metrics_por_thr,
+            'calibration_curve': cal_bins,
             'tempo_fold_s': round(t_fold_end - t_fold_start, 2),
         })
         with io.open(OUT, 'w', encoding='utf-8') as f:
             json.dump({'parcial': True, 'fold_atual': len(folds), 'folds': folds},
                       f, ensure_ascii=False, indent=2)
         print('fold', len(folds), data_dia[test_day], 'auc', auc,
-              'modelo 0.6:', m_princ['n_trades'], 'trades,',
-              m_princ['expectancy'], 'pts/trade', flush=True)
+              'ece', ece, flush=True)
+
+    # Resumo global
+    aucs = [f['auc'] for f in folds if f.get('auc') is not None]
+    eces = [f['ece'] for f in folds if f.get('ece') is not None]
 
     res = {
-        'descricao': 'Walk-forward OTIMIZADO v9.38 (n_jobs=-1, cache, float32, baselines vetorizados)',
+        'descricao': 'Walk-forward HONESTO v12.2: so metricas de qualidade (AUC+ECE+calibration)',
         'dataset': _path,
         'modelo': MODELO,
         'features': len(Xcols),
-        'custo_pts': COSTO,
-        'threshold_principal': THRESH_PRINCIPAL,
         'purge_s': PURGE_S,
         'embargo_s': EMBARGO_S,
         'target': 'binario TP-vs-nao-TP',
+        'resumo_global': {
+            'n_folds': len(folds),
+            'auc_media': round(float(np.mean(aucs)), 4) if aucs else None,
+            'ece_media': round(float(np.mean(eces)), 4) if eces else None,
+        },
         'tempo_total_s': round(time.time() - t0, 2),
         'folds': folds,
     }
