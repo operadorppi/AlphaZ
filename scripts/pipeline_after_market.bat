@@ -19,22 +19,18 @@ if "%DIA%"=="" (
 echo Dia: %DIA%
 echo.
 
-echo [1/4] Validacao RAW Hive...
+echo [1/3] Validacao RAW Hive...
 python scripts/validar_raw_hive.py --raw-path D:\MarketData\Profit --dia %DIA%
 if %errorlevel% neq 0 (
     echo [AVISO] Validacao encontrou problemas
 )
 
 echo.
-echo [2/4] Relatorio de qualidade...
-python scripts/converter_brutos_parquet.py --dia %DIA% --save-dir D:\MarketData\Profit
-
-echo.
-echo [3/4] Features 100ms (batch_processor)...
+echo [2/3] Features 100ms (batch_processor)...
 python ml/batch_processor.py --ativo WINV26,WDOV26,INDV26,DOLV26 --periodo %DIA%-%DIA%
 
 echo.
-echo [4/4] Retreino do modelo...
+echo [3/3] Retreino do modelo...
 python ml/retreinar_lgbm_limpo.py --ativo WINV26
 
 echo.
