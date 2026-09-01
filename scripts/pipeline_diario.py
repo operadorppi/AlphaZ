@@ -53,7 +53,7 @@ def run(modulo, args_list, log_file, passo, desc, dry_run=False):
     env['PYTHONPATH'] = str(_root) + os.pathsep + str(_root / 'scripts') + os.pathsep + env.get('PYTHONPATH', '')
     
     cmd = [PYTHON, str(modulo_path)] + args_list
-    desc_str = f'[{passo}/6] {desc}'
+    desc_str = f'[{passo}/7] {desc}'
     print(f'\n{desc_str}')
     print(f'  $ {" ".join(cmd)}')
     if dry_run:
@@ -105,8 +105,16 @@ def main():
     if args.dry_run:
         print('MODO: --dry-run (nenhuma execução real)\n')
 
+    # 0. Converter JSONL brutos em Parquet por ativo
+    print(f'\n[0/7] Conversão JSONL → Parquet ({dia})')
+    if not args.dry_run:
+        run('scripts/converter_brutos_parquet.py', ['--dia', dia, '--save-dir', save_dir],
+            log_file, 0, 'Conversão JSONL → Parquet', dry_run=args.dry_run)
+    else:
+        print(f'  converter_brutos_parquet.py --dia {dia}')
+
     # 1. Relatório de qualidade
-    print(f'\n[1/6] Relatório de qualidade ({dia})')
+    print(f'\n[1/7] Relatório de qualidade ({dia})')
     if not args.dry_run:
         from relatorio_diario import gerar_relatorio, validar_dia
         # Validação prévia (exit 1 se o dia base estiver com problema)
@@ -126,14 +134,14 @@ def main():
         run('ml/batch_processor.py', ['--periodo', periodo, '--ativo', ','.join(ATIVOS)],
             log_file, 2, 'Features 100ms (batch_processor)', dry_run=args.dry_run)
     else:
-        print(f'\n[2/6] Features 100ms — pulado (--skip-batch)')
+        print(f'\n[2/7] Features 100ms — pulado (--skip-batch)')
 
     # 3. Labels — v9.13: usa labeler_VECTORIZADO (o labeler.py tinha o bug do
     # purge rearmado a cada linha neutra, gerando parquets ~100% neutros).
     if not args.skip_batch:
         feat_path = Path(save_dir) / feat_file
         if not args.dry_run and (not feat_path.exists() or feat_path.stat().st_size == 0):
-            print(f'\n[3/6] Features vazias/ausentes: {feat_path}')
+            print(f'\n[3/7] Features vazias/ausentes: {feat_path}')
             print('  (nada para rotular — o pipeline abortado para não gerar parquet vazio)')
             sys.exit(3)
         run('ml/labeler_vectorizado.py',
@@ -141,7 +149,7 @@ def main():
              '--tp', '100', '--sl', '50', '--max-holding', '30', '--purge', '10'],
             log_file, 3, 'Labels (labeler_vectorizado)', dry_run=args.dry_run)
     else:
-        print(f'\n[3/6] Labels — pulado (--skip-batch)')
+        print(f'\n[3/7] Labels — pulado (--skip-batch)')
 
     # 4. Dataset final (parquet)
     if not args.skip_batch:
@@ -152,7 +160,7 @@ def main():
              '--output', out_parquet],
             log_file, 4, 'Dataset final (dataset_builder)', dry_run=args.dry_run)
     else:
-        print(f'\n[4/6] Dataset final — pulado (--skip-batch)')
+        print(f'\n[4/7] Dataset final — pulado (--skip-batch)')
 
     # 4.5 (v9.32) Integração das camadas de contexto (ajuste oficial B3 + VWAP
     # intraday + features de regime + interações micro x contexto).
@@ -160,14 +168,14 @@ def main():
     # vwap_<YYYYMM>.parquet, que alimentam o scorer ao vivo e o dashboard.
     if not args.skip_batch:
         mes_str = f'{hoje.year}{hoje.month:02d}'
-        run('ml/integrar_base.py',
+    run('ml/integrar_base.py',
             ['--mes', mes_str, '--ativo'] + ATIVOS,
             log_file, 4.5, 'Integrar contexto avançado (v9.32)', dry_run=args.dry_run)
     else:
-        print(f'\n[4.5/6] Integrar contexto — pulado (--skip-batch)')
+        print(f'\n[4.5/7] Integrar contexto — pulado (--skip-batch)')
 
     # 5. Gate de dados — Dias úteis do mês até hoje (protege o parquet)
-    print(f'\n[5/6] Gate de qualidade')
+    print(f'\n[5/7] Gate de qualidade')
     from relatorio_diario import ultimos_dias_uteis
     from glob import glob
     # Só validar dias que REALMENTE têm dados brutos
@@ -234,7 +242,7 @@ def main():
         print(f'  retreinar_lgbm_limpo.gate_qualidade({save_dir}, {dias_gate})')
 
     # 6. Retreino
-    print(f'\n[6/6] Retreino do modelo')
+    print(f'\n[6/7] Retreino do modelo')
     # v9.32: usar dataset enriquecido (com VWAP, ajuste, regime) se existir
     retrain_args = ['--gate-dias', ','.join(dias_gate), '--save-dir', save_dir, '--ativo', ATIVO]
     run('ml/retreinar_lgbm_limpo.py',

@@ -145,7 +145,8 @@ class MarketState:
         self.cross_engine = self.cross_manager
 
         # Padroes (spoof, stop-hunt)
-        self.padroes = padroes or PadroesMemoria(self.base_dir, config=self.config)
+        padroes_arg = padroes if padroes is not None else (self.base_dir or '.')
+        self.padroes = padroes or PadroesMemoria(padroes_arg, config=self.config)
 
         # Dia
         self.dia_atual = date.today()
@@ -398,7 +399,12 @@ class MarketState:
                 'ask_vol': np.array([l.volume for l in snapshot.asks], dtype=np.float32),
                 'ask_preco': np.array([l.price for l in snapshot.asks], dtype=np.float32),
             }
-            book_level_data = blf.calcular(book_snap_dict, ativo, int(time.time() * 1000))
+            book_level_data = blf.calcular(book_snap_dict, ativo, int(time.time() * 1000)) or {}
+            # Atualizar OFI tracker do feature_engine (separado do BookLevelFeatures)
+            ofi_trk = self.trackers[ativo]['ofi']
+            bid_levels_ofi = [(float(p), int(v)) for p, v in zip(book_snap_dict['bid_preco'][:5], book_snap_dict['bid_vol'][:5]) if p > 0]
+            ask_levels_ofi = [(float(p), int(v)) for p, v in zip(book_snap_dict['ask_preco'][:5], book_snap_dict['ask_vol'][:5]) if p > 0]
+            ofi_trk.atualizar(bid_levels_ofi, ask_levels_ofi)
 
             if ant:
                 snap_ant, bv_ant, av_ant = ant
@@ -439,6 +445,9 @@ class MarketState:
                     be.setdefault(seg, []).extend(evts)
                     while len(be) > self.config.get("book_events_seg_max", 300):
                         be.popitem(last=False)
+            else:
+                # Primeiro snapshot: ainda não tem anterior, mas salva book_level
+                self.book_stats[ativo] = {'book_level': book_level_data or {}}
 
             self.book_snap_ant[ativo] = (snap, bid_vol, ask_vol)
             for b in list(persist):

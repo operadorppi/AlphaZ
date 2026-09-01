@@ -83,6 +83,11 @@ class BookLevelFeatures:
         if getattr(self, '_ofi_interno', None):
             self._ofi_interno = {}
 
+    @staticmethod
+    def _f(val):
+        """Converte numpy types para Python float (evita strings no JSON)."""
+        return float(val) if val is not None else None
+
     def calcular(self, book_snapshot, ativo, ts_ms):
         # v10.5: Vetorização NumPy para processar 500 níveis instantaneamente
         bid_v = np.array(self._extrair_vols(book_snapshot, 'bid'), dtype=np.float32)
@@ -195,36 +200,45 @@ class BookLevelFeatures:
         for k, v in cum_ask_by_depth.items(): self._prev[ativo]['cum_ask_' + k] = v
         self._prev[ativo]['ofi'] = ofi
 
+        # Calcular HHI do book
+        bid_vols = list(bid_v)
+        ask_vols = list(ask_v)
+        all_vols = bid_vols + ask_vols
+        hhi_book = hhi(all_vols) if all_vols else 0.0
+
+        f = self._f  # alias para conversao numpy -> float
         res = {
             'ts_ms': ts_ms,
-            'spread': round(spread, 1),
-            'mid': round(mid, 1),
-            'microprice': round(microprice, 1),
-            'microprice_vs_mid': round(microprice - mid, 2),
-            'imbalance': imb_by_depth,
-            'cum_bid': cum_bid_by_depth,
-            'cum_ask': cum_ask_by_depth,
-            'hhi_book': round(hhi_book, 4),
-            'liq_dist_bid': liq_dist_bid,
-            'liq_dist_ask': liq_dist_ask,
-            'ofi': round(ofi, 1),
-            'micro_drift_bps': round(micro_drift_bps, 2),
-            'micro_drift_ewma': round(self._micro_drift_ewma, 2),
-            'imb_ponderado': round(imb_ponderado, 4),
-            'slope_bid': round(slope_bid, 4),
-            'slope_ask': round(slope_ask, 4),
-            'vel_bid': round(vel_bid, 1),
-            'vel_ask': round(vel_ask, 1),
-            'vel_bid_ewma': round(self._vel_bid_ewma, 1),
-            'vel_ask_ewma': round(self._vel_ask_ewma, 1),
-            'vel_imb': vel_imb,
-            'n_bid_levels': len(bid_vols),
-            'n_ask_levels': len(ask_vols),
+            'spread': f(round(spread, 1)),
+            'mid': f(round(mid, 1)),
+            'microprice': f(round(microprice, 1)),
+            'microprice_vs_mid': f(round(microprice - mid, 2)),
+            'imbalance': {k: f(v) for k, v in imb_by_depth.items()},
+            'cum_bid': {k: f(v) for k, v in cum_bid_by_depth.items()},
+            'cum_ask': {k: f(v) for k, v in cum_ask_by_depth.items()},
+            'hhi_book': f(round(hhi_book, 4)),
+            'liq_dist_bid': f(liq_dist_bid),
+            'liq_dist_ask': f(liq_dist_ask),
+            'ofi': f(round(ofi, 1)),
+            'ofi_total': f(round(self._ofi_interno[ativo].ofi_total, 1)) if ativo in self._ofi_interno else 0.0,
+            'ofi_ewma': f(round(self._ofi_interno[ativo].ofi_ewma, 1)) if ativo in self._ofi_interno else 0.0,
+            'micro_drift_bps': f(round(micro_drift_bps, 2)),
+            'micro_drift_ewma': f(round(self._micro_drift_ewma, 2)),
+            'imb_ponderado': f(round(imb_ponderado, 4)),
+            'slope_bid': f(round(slope_bid, 4)),
+            'slope_ask': f(round(slope_ask, 4)),
+            'vel_bid': f(round(vel_bid, 1)),
+            'vel_ask': f(round(vel_ask, 1)),
+            'vel_bid_ewma': f(round(self._vel_bid_ewma, 1)),
+            'vel_ask_ewma': f(round(self._vel_ask_ewma, 1)),
+            'vel_imb': {k: f(v) for k, v in vel_imb.items()},
+            'n_bid_levels': int(len(bid_vols)),
+            'n_ask_levels': int(len(ask_vols)),
         }
 
         # Adiciona atalhos planos para todos os imbalances (compatibilidade com flatten_snapshot)
         for k, v in imb_by_depth.items():
-            res[f'imb_{k}'] = v
+            res[f'imb_{k}'] = f(v)
             
         return res
 
@@ -232,20 +246,16 @@ class BookLevelFeatures:
         key_p = lado + '_preco'
         key_v = lado + '_vol'
         pares = []
-        if key_p in snap and isinstance(snap[key_p], list) and \
-           key_v in snap and isinstance(snap[key_v], list):
+        if key_p in snap and hasattr(snap[key_p], '__iter__') and \
+           key_v in snap and hasattr(snap[key_v], '__iter__'):
             for p, v in zip(snap[key_p], snap[key_v]):
-                if p > 0 and v > 0:
-                    pares.append((float(p), int(v)))
-            return pares
-        if key_p in snap and isinstance(snap[key_p], dict) and \
-           key_v in snap and isinstance(snap[key_v], dict):
-            n_max = max(len(snap[key_p]), len(snap[key_v]))
-            for i in range(n_max):
-                p = snap[key_p].get(i, 0)
-                v = snap[key_v].get(i, 0)
-                if p > 0 and v > 0:
-                    pares.append((float(p), int(v)))
+                try:
+                    pf = float(p)
+                    vf = float(v)
+                    if pf > 0 and vf > 0:
+                        pares.append((pf, int(vf)))
+                except (TypeError, ValueError):
+                    continue
             return pares
         return pares
 

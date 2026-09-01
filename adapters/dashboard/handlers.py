@@ -42,15 +42,11 @@ class DashboardHandlers:
 
     @staticmethod
     def handle_root(handler):
-        """Serve dashboard_pro.html com cache por mtime."""
+        """Serve dashboard_pro.html - sempre re-le para pegar atualizacoes."""
         try:
-            _dash = pathlib.Path(__file__).resolve().parent.parent.parent / 'dashboard_pro.html'
-            _mtime = _dash.stat().st_mtime if _dash.exists() else -1
-            if getattr(handler.__class__, '_dash_mtime', None) != _mtime:
-                handler.__class__._dash_html = _dash.read_text(encoding='utf-8') if _dash.exists() else None
-                handler.__class__._dash_mtime = _mtime
-            if handler.__class__._dash_html:
-                return handler.__class__._dash_html, 'text/html'
+            _dash = pathlib.Path(__file__).resolve().parent / 'dashboard_pro.html'
+            if _dash.exists():
+                return _dash.read_text(encoding='utf-8'), 'text/html'
         except Exception:
             pass
         return handler.app.html() if hasattr(handler.app, 'html') else 'dashboard not found', 'text/html'
@@ -59,6 +55,22 @@ class DashboardHandlers:
     def handle_api_status(handler, params=None):
         if handler.state:
             return handler.state.payload()
+        # Fallback: usar app diretamente (nova arquitetura)
+        if handler.app:
+            try:
+                app = handler.app
+                return {
+                    'ativos': list(app.market_state.stats.keys()) if hasattr(app, 'market_state') else [],
+                    'posicao': app.get_posicao() or {},
+                    'features': app.get_features(),
+                    'sinais': app.get_sinais(),
+                    'metricas': app.calcular_metricas(),
+                    'learning': app.get_estatisticas(),
+                    'capture_health': app.get_capture_health(),
+                    'rtd_health': app.get_rtd_health(),
+                }
+            except Exception as e:
+                return {'error': str(e)}
         return {"error": "State not initialized"}
 
     @staticmethod
@@ -134,6 +146,9 @@ class DashboardHandlers:
         result = {}
         if handler.app.scorer:
             result = handler.app.scorer.estado_salud()
+            # v12.0: Adicionar features de regime ao estado do scorer
+            if hasattr(handler.app.scorer, 'regime'):
+                result['regime'] = handler.app.scorer.regime
         # v11.10: Adicionar dados de calibração
         if hasattr(handler.app.signal, 'calibration') and handler.app.signal.calibration:
             sep = handler.app.signal.calibration
@@ -152,6 +167,47 @@ class DashboardHandlers:
     @staticmethod
     def handle_api_historico(handler, params=None):
         return handler.app.get_historico()
+
+    @staticmethod
+    def handle_api_regime(handler, params=None):
+        """v12.1: Retorna features de regime + ATR + volume relativo ao vivo."""
+        result = {}
+        if hasattr(handler.app, 'scorer') and handler.app.scorer:
+            scorer = handler.app.scorer
+            
+            # Regime features
+            if hasattr(scorer, 'regime'):
+                for ativo, tracker in scorer.regime.items():
+                    snap = tracker.snapshot()
+                    result[ativo] = snap
+            
+            # ATR features (v12.1: adicionar ao dashboard)
+            if hasattr(scorer, '_atr_values'):
+                for ativo, atr_val in scorer._atr_values.items():
+                    if ativo not in result:
+                        result[ativo] = {}
+                    result[ativo]['atr_14'] = atr_val
+                    result[ativo]['atr_14_norm'] = atr_val / max(scorer._atr_prev.get(ativo, 0), 1.0)
+            
+            # Volume relativo (v12.1: adicionar ao dashboard)
+            vol_rel_attr = getattr(scorer, 'vol_rel', None) or getattr(scorer, 'vrels', None)
+            if vol_rel_attr:
+                for ativo, tracker in vol_rel_attr.items():
+                    if ativo not in result:
+                        result[ativo] = {}
+                    result[ativo].update(tracker.snapshot())
+            
+            # VWAP inclinação (v12.1: adicionar ao dashboard)
+            if hasattr(scorer, '_vwap_history'):
+                for ativo, hist in scorer._vwap_history.items():
+                    if ativo not in result:
+                        result[ativo] = {}
+                    if len(hist) >= 600:
+                        result[ativo]['vwap_inclinacao_1m'] = (hist[-1] - hist[-600]) / max(hist[-600], 1.0)
+                    if len(hist) >= 3000:
+                        result[ativo]['vwap_inclinacao_5m'] = (hist[-1] - hist[-3000]) / max(hist[-3000], 1.0)
+        
+        return result if result else {'error': 'Tracker não disponível'}
 
     @staticmethod
     def handle_api_decisoes(handler, params=None):
@@ -179,8 +235,19 @@ class DashboardHandlers:
                 'saldo_corretoras': app.get_saldo_corretoras(),
                 'padroes': app.market_state.padroes.get_resumo(),
                 'ml_health': app.scorer.estado_salud() if app.scorer else {},
+                'book_level': app.get_book_level() if hasattr(app, 'get_book_level') else {},
+                'rtd_health': app.get_rtd_health() if hasattr(app, 'get_rtd_health') else {},
                 'capture_health': app.get_capture_health() if hasattr(app, 'get_capture_health') else {},
             }
+            # Merge regime features (atr_14, volume_relativo, vwap_inclinacao)
+            try:
+                regime_data = DashboardHandlers.handle_api_regime(handler, params)
+                if isinstance(regime_data, dict) and not regime_data.get('error'):
+                    for ativo, rfeat in regime_data.items():
+                        if ativo in handler._snapshot.get('features', {}):
+                            handler._snapshot['features'][ativo].update(rfeat)
+            except Exception:
+                pass
             handler._snapshot_ts = now
         return handler._snapshot
 

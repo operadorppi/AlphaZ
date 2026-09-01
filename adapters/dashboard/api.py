@@ -65,6 +65,7 @@ _ROUTES = [
     ('/api/contexto',         'handle_api_contexto',       True),
     ('/api/ml_health',        'handle_api_ml_health',      True),
     ('/api/historico',        'handle_api_historico',      True),
+    ('/api/regime',           'handle_api_regime',         True),  # v12.0
     ('/api/decisoes',         'handle_api_decisoes',       True),
     ('/api/all',              'handle_api_all',            True),
     ('/health',               'handle_health',             True),
@@ -125,8 +126,14 @@ class DashboardAPI(BaseHTTPRequestHandler):
         self.send_error(404)
 
     def _html(self, body):
+        import time as _time
         self.send_response(200)
         self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0, private')
+        self.send_header('Pragma', 'no-cache')
+        self.send_header('Expires', '0')
+        self.send_header('Vary', '*')
+        self.send_header('ETag', '"' + str(int(_time.time()*1000)) + '"')
         self.end_headers()
         if isinstance(body, str):
             body = body.encode()
@@ -142,6 +149,9 @@ class DashboardAPI(BaseHTTPRequestHandler):
             payload = b'{}'
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
+        self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
+        self.send_header('Pragma', 'no-cache')
+        self.send_header('Expires', '0')
         if etag:
             self.send_header('ETag', etag)
         self.end_headers()

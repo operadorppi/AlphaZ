@@ -1,3 +1,42 @@
+## v13.0 — Fix Crítico: TRADE Pipeline Completo + 4 Ativos (01/09/2026)
+
+### Bug Crítico Corrigido (P0)
+
+O bloco `TRADE` em `core/app.py` estava **incompleto** — processava apenas:
+1. Alimentar market_state
+2. Gravar no capture daemon
+
+**Faltava** (só existia no bloco RLP):
+- Scorer ML (evento)
+- Replay gate
+- Cálculo de features + sinal (`signal.calcular()`)
+- Risk Engine
+- Position Manager
+- Decision Journal
+
+**Impacto:** Como o ProfitChart gera eventos `TRADE` (não `RLP`), o pipeline inteiro de trading estava morto. O motor gravava dados mas nunca gerava features, sinais ou operava.
+
+**Fix:** Copiar a lógica completa do bloco RLP para o bloco TRADE em `_handle_market_event()`.
+
+### Mapeamento de Ativos (Content-Based)
+
+O motor lê o campo `ATV` de cada janela RTD (`{T&T|i}.INFO.ATV` e `{BOOK|i}.INFO.ATV`), identificando o ativo pelo **conteúdo**, não pela **posição**. A ordem das janelas no ProfitChart é irrelevante — o mapeamento é automático e correto.
+
+### Resultado: 4 Ativos Funcionando
+
+| Ativo | Preço | Features | Status |
+|-------|-------|----------|--------|
+| WINV26 | ~183.300 | 69 | ✅ |
+| INDV26 | ~183.300 | 69 | ✅ |
+| WDOV26 | ~5.174 | 69 | ✅ |
+| DOLV26 | ~5.174 | 69 | ✅ |
+
+### Nota sobre Ordem das Janelas
+
+A ordem das janelas T&T e BOOK no ProfitChart é aleatória a cada reinício. Isso não afeta o funcionamento — o motor detecta cada ativo pelo campo `ATV` e mapeia corretamente, independente da posição da janela.
+
+---
+
 ## v12.0 — Replay Engine com Validacao Multi-Dia (29/08/2026)
 
 ### Replay multi-dia

@@ -63,7 +63,7 @@ from core.risk_manager import RiskManager
 from core.risk_engine import RiskEngine
 from core.position_manager import PositionManager
 from core.signal_engine import SignalEngine
-from core.decision_journal import DecisionJournal, DecisionEntry
+from core.decision_journal import DecisionJournal, TradeDecision
 from features.feature_engine import FeatureEngine
 from core.utils import fnum, fint, sstr, parse_hms_ms, tod_ms
 from adapters.dashboard_server import DashboardServer
@@ -81,7 +81,31 @@ class App:
             self.config = config
         else:
             _cfg_mod = _load_root_config()
-            self.config = getattr(_cfg_mod, 'CONFIG', None) if getattr(_cfg_mod, 'CONFIG', None) is not None else (_cfg_mod.get_config_dict() if _cfg_mod else {})
+            if _cfg_mod:
+                # Tentar usar CONFIG se disponível (legacy)
+                self.config = getattr(_cfg_mod, 'CONFIG', None)
+                # Se não tiver CONFIG, usar get_config_dict() que já carrega tudo
+                if self.config is None:
+                    from config import get_config_dict
+                    try:
+                        self.config = get_config_dict()
+                        # Garantir chaves default que o código lê
+                        self.config.setdefault('save_dir', r'D:\MarketData\mimo')
+                        self.config.setdefault('ativo_principal', 'WINV26')
+                        self.config.setdefault('ativo_contexto', 'WDOU26')
+                        self.config.setdefault('ml_modelo', '')
+                        self.config.setdefault('web_host', '127.0.0.1')
+                        self.config.setdefault('web_port', 5001)
+                        self.config.setdefault('save_intervalo', 60)
+                    except Exception as e:
+                        log.warning(f'[APP] Falha ao carregar config via get_config_dict(): {e}')
+                        self.config = {}
+                else:
+                    # CONFIG é um dict legacy
+                    if not isinstance(self.config, dict):
+                        self.config = {}
+            else:
+                self.config = {}
 
         self.data_source = data_source
         self.save_dir = self.config.get('save_dir', 'D:\\MarketData\\mimo')
@@ -152,68 +176,74 @@ class App:
 
     def _verificar_replay_gate(self):
         """Verifica se o replay do último dia capturado aprovou o modelo.
-
-        Regras de go/no-go:
-          - PF > 1.2  (lucro médio por trade > perda média)
-          - Win rate > 45%
-          - Max drawdown > -200 pts/dia
-          - Número de trades >= 3 (estatisticamente relevante)
-
-        Se o replay não foi rodado ou não passou nos critérios,
-        o motor opera em modo CAPTURA PURA (grava dados, não trade).
-
-        Returns:
-            True se aprovado, False se bloqueado
+        
+        Usa replaygate/ para avaliação padronizada (FASE 9 P1).
         """
-        exigir = self.config.get('exigir_replay_validado', False)
-        if not exigir:
-            log.info('[REPLAY-GATE] Gate nao obrigatorio — trading habilitado')
-            return True
-
-        REPLAY_JSON = Path(self.save_dir) / 'replay_resultado.json'
-
-        if not REPLAY_JSON.exists():
-            log.warning('[REPLAY-GATE] Nenhum replay encontrado. Modo CAPTURA PURA.')
-            log.warning('[REPLAY-GATE] Rode: python replay_engine.py --modo validacao --dias 3')
-            return False
-
+        from replaygate import (
+            Environment,
+            ReplayStatus,
+            evaluate_replay_gate,
+            environment_policy,
+        )
+        
+        exigir = self.config.get('require_replay_validated', False)
+        ambiente_str = self.config.get('environment', 'DEVELOPMENT')
+        
+        # Mapear ambiente string para Enum
         try:
-            with open(REPLAY_JSON, encoding='utf-8') as f:
-                replay = json.load(f)
-        except Exception as e:
-            log.error(f'[REPLAY-GATE] Erro ao ler replay: {e}. Modo CAPTURA PURA.')
-            return False
-
-        # Extrair métricas (suporta ambos os formatos: replay_resultado.json e replay_ultimo_dia.json)
-        pf = replay.get('profit_factor', replay.get('pf_medio', 0))
-        wr = replay.get('win_rate', replay.get('wr_medio', 0))
-        max_dd = replay.get('max_drawdown_pts', replay.get('dd_dia_medio', 0))
-        n_trades = replay.get('n_trades', replay.get('total_trades', replay.get('n_trades_medio', 0)))
-
-        log.info(f'[REPLAY-GATE] Último replay: PF={pf:.2f}, WR={wr:.1%}, '
-                 f'MaxDD={max_dd:.0f}pts, N={n_trades}')
-
-        # Critérios
-        checks = [
-            ('PF > 1.2', pf > 1.2),
-            ('Win rate > 45%', wr > 0.45),
-            ('Max DD > -200', max_dd > -200),
-            ('N trades >= 3', n_trades >= 3),
-        ]
-
-        for nome, ok in checks:
-            status = 'OK' if ok else 'FAIL'
-            log.info(f'[REPLAY-GATE]   [{status}] {nome}')
-
-        aprovado = all(ok for _, ok in checks)
-
-        if aprovado:
-            log.info('[REPLAY-GATE] APROVADO — Trading habilitado')
+            ambiente = Environment(ambiente_str)
+        except ValueError:
+            log.warning(f'[REPLAY-GATE] Ambiente inválido: {ambiente_str}, usando DEVELOPMENT')
+            ambiente = Environment.DEVELOPMENT
+        
+        policy = environment_policy(ambiente)
+        
+        if not exigir:
+            # Se não exige replay, considera como validado
+            replay_status = ReplayStatus.validated_()
+            log.info(f'[REPLAY-GATE] Gate não obrigatório — replay marcado como validado')
         else:
-            log.warning('[REPLAY-GATE] BLOQUEADO — Modo CAPTURA PURA')
-            log.warning('[REPLAY-GATE] Corrija o modelo/sinal e rode o replay novamente')
-
-        return aprovado
+            # Verificar se há replay válido
+            REPLAY_JSON = Path(self.save_dir) / 'replay_resultado.json'
+            if not REPLAY_JSON.exists():
+                log.warning('[REPLAY-GATE] Nenhum replay encontrado. Modo CAPTURA PURA.')
+                log.warning('[REPLAY-GATE] Rode: python replay_engine.py --modo validacao --dias 3')
+                replay_status = ReplayStatus.pending("nenhum replay encontrado")
+            else:
+                # Tentar validar o replay (simplificado - em produção real, validar métricas)
+                try:
+                    import json
+                    with open(REPLAY_JSON, encoding='utf-8') as f:
+                        replay = json.load(f)
+                    # Verificar critérios básicos
+                    pf = replay.get('profit_factor', replay.get('pf_medio', 0))
+                    wr = replay.get('win_rate', replay.get('wr_medio', 0))
+                    max_dd = replay.get('max_drawdown_pts', replay.get('dd_dia_medio', 0))
+                    n_trades = replay.get('n_trades', replay.get('total_trades', 0))
+                    
+                    if pf > 1.2 and wr > 0.45 and max_dd > -200 and n_trades >= 3:
+                        replay_status = ReplayStatus.validated_()
+                        log.info(f'[REPLAY-GATE] Replay validado: PF={pf:.2f}, WR={wr:.1%}')
+                    else:
+                        replay_status = ReplayStatus.pending(
+                            f"replay insuficiente: PF={pf:.2f}, WR={wr:.1%}, "
+                            f"DD={max_dd:.0f}, N={n_trades}"
+                        )
+                except Exception as e:
+                    log.error(f'[REPLAY-GATE] Erro ao validar replay: {e}')
+                    replay_status = ReplayStatus.pending(f"erro na validação: {e}")
+        
+        # Avaliar gate usando replaygate
+        from mlgate import MlAvailability
+        # Assumir ML disponível para esta verificação (o mlgate é verificado separadamente)
+        ml_status = MlAvailability.up()
+        
+        decision = evaluate_replay_gate(ml_status, replay_status, policy)
+        
+        log.info(f'[REPLAY-GATE] Decision: allowed={decision.allowed}, '
+                 f'source={decision.decision_source}, replay_validated={decision.replay_validated}')
+        
+        return decision.allowed
 
     def _carregar_scorer(self):
         modelo_path = self.config.get('ml_modelo', '')
@@ -320,7 +350,10 @@ class App:
 
 
                 # Saúde do capture daemon
-                if time.time() - ultimo_captura_log > 600:
+                # Saúde do capture daemon
+                # v12.3: CORREÇÃO — 600s (10min) é muito tempo. Se o daemon morre,
+                # perdemos 10min de dados antes de descobrir. 60s é mais seguro.
+                if time.time() - ultimo_captura_log > 60:
                     ultimo_captura_log = time.time()
                     health = self.capture_daemon.health_check()
                     if not health['alive']:
@@ -372,6 +405,78 @@ class App:
                 trade.aggressor, trade.buyer, trade.seller
             )])
 
+            # 3. Alimentar Scorer ML (se disponível)
+            if self.scorer:
+                self.scorer.evento(trade.symbol, trade.timestamp_ms, trade.price,
+                                  trade.quantity, trade.aggressor, trade.buyer, trade.seller)
+
+            # 4. Replay gate: se não aprovado, modo CAPTURA PURA
+            if not self._replay_aprovado:
+                return
+
+            # 5. Calcular features + sinal
+            seg = trade.timestamp_ms // 1000
+            sig: Signal = self.signal.calcular(seg, skip_avaliar=False)
+
+            # 6. Acoplamento com PositionManager
+            if sig and trade.symbol == self.ativo_principal:
+                self.position.confianca_ewma = sig.confianca
+
+                res_recentes = self.learning.resultados if self.learning else []
+                bs = self.market_state.book_stats.get(trade.symbol, {}) or {}
+                blf = bs.get('book_level', None) or {}
+                self.risk_engine.atualizar_mercado(
+                    preco_ts=trade.timestamp_ms,
+                    spread=blf.get('spread', 0),
+                    vol_bps=blf.get('vel_bid_ewma', 0),
+                    ml_disponivel=self.scorer is not None,
+                    confianca=sig.confianca,
+                )
+
+                decision = self.risk_engine.avaliar(sig, res_recentes)
+
+                action = self.position.gerenciar(
+                    ativo=trade.symbol,
+                    signal=sig,
+                    preco=trade.price,
+                    decision=decision,
+                    regime=self.signal.features.get(trade.symbol, {}).get('regime')
+                )
+
+                if action and hasattr(action, 'tipo') and action.tipo in ('ABRIR', 'FECHAR'):
+                    entry = TradeDecision(
+                        timestamp_do_evento=trade.timestamp_ms / 1000.0,
+                        timestamp_de_processamento=time.time(),
+                        ativo=trade.symbol,
+                        acao=action.tipo,
+                        lado=action.lado,
+                        preco=action.preco,
+                        score=sig.score,
+                        confianca=sig.confianca,
+                        ml_prob=sig.ml_prob,
+                        sinal=1 if sig.lado == 'C' else (-1 if sig.lado == 'V' else 0),
+                        regime=self.signal.features.get(trade.symbol, {}).get('regime', 'lateral'),
+                        tp=action.tp, sl=action.sl,
+                        risk_decision=decision.decisao if hasattr(decision, 'decisao') else '',
+                        risk_motivo=decision.motivo if hasattr(decision, 'motivo') else '',
+                        motivos=sig.motivos,
+                        modelo=(
+                            'heuristico' if not self.scorer
+                            else ('heuristico+ML(USADO)' if sig.ml_prob > 0.5 and sig.lado != ''
+                                  else 'heuristico+ML(BLOQUEADO)')
+                        ),
+                        model_version=self.config.get('ml_modelo', '').split('\\')[-1] if self.config.get('ml_modelo') else '',
+                    )
+                    self.journal.registrar(entry)
+
+        elif event.type == 'RLP':
+            # v12.5: RLP (Registro de Livros e Posicoes) - gravar separadamente
+            trade: TradeEvent = event.payload
+            self.capture_daemon.registrar_rlp([(
+                trade.symbol, trade.timestamp_ms, trade.price, trade.quantity,
+                trade.aggressor, trade.buyer, trade.seller
+            )])
+
             # 3. Alimentar Scorer ML PRIMEIRO (Inferência precisa rodar
             #    ANTES do signal engine para que self.scorer.prob tenha
             #    a probabilidade do evento ATUAL, não do anterior).
@@ -379,13 +484,15 @@ class App:
                 self.scorer.evento(trade.symbol, trade.timestamp_ms, trade.price, 
                                   trade.quantity, trade.aggressor, trade.buyer, trade.seller)
 
-            # 4. Calcular features + sinal (Lógica)
-            seg = trade.timestamp_ms // 1000
-            sig: Signal = self.signal.calcular(seg, skip_avaliar=False)
-            
-            # 5. Replay gate: se não aprovado, modo CAPTURA PURA (não trade)
+            # 4. Replay gate: se não aprovado, modo CAPTURA PURA (não trade)
+            # v12.3: CORREÇÃO — gate ANTES de calcular sinal para não gastar CPU
+            # em modo captura pura. O sinal nunca será usado, então não calcula.
             if not self._replay_aprovado:
                 return  # Grava dados (passo 2 já fez), não processa sinais/trading
+
+            # 5. Calcular features + sinal (Lógica)
+            seg = trade.timestamp_ms // 1000
+            sig: Signal = self.signal.calcular(seg, skip_avaliar=False)
             
             # 6. Acoplamento com PositionManager (Execução)
             if sig and trade.symbol == self.ativo_principal:
@@ -396,8 +503,8 @@ class App:
                 res_recentes = self.learning.resultados if self.learning else []
                 
                 # Atualizar estado de mercado no risk engine
-                bs = self.market_state.book_stats.get(trade.symbol, {})
-                blf = bs.get('book_level', {})
+                bs = self.market_state.book_stats.get(trade.symbol, {}) or {}
+                blf = bs.get('book_level', None) or {}
                 self.risk_engine.atualizar_mercado(
                     preco_ts=trade.timestamp_ms,
                     spread=blf.get('spread', 0),
@@ -418,8 +525,11 @@ class App:
                 
                 # Decision Journal: registrar ação executada
                 if action and hasattr(action, 'tipo') and action.tipo in ('ABRIR', 'FECHAR'):
-                    entry = DecisionEntry(
-                        ts_ms=trade.timestamp_ms,
+                    entry = TradeDecision(
+                        # trade.timestamp_ms e em MILISSEGUNDOS; os campos do
+                        # journal sao em SEGUNDOS (unix).
+                        timestamp_do_evento=trade.timestamp_ms / 1000.0,
+                        timestamp_de_processamento=time.time(),
                         ativo=trade.symbol,
                         acao=action.tipo,
                         lado=action.lado,
@@ -433,7 +543,14 @@ class App:
                         risk_decision=decision.decisao if hasattr(decision, 'decisao') else '',
                         risk_motivo=decision.motivo if hasattr(decision, 'motivo') else '',
                         motivos=sig.motivos,
-                        modelo='heuristico' if not self.scorer else 'heuristico+ML',
+                        # v12.3: CORREÇÃO — Registrar se o ML foi usado (gate passou)
+                        # ou apenas consultado (gate bloqueou). Isso ajuda na análise
+                        # posterior de performance do ML vs heurística.
+                        modelo=(
+                            'heuristico' if not self.scorer
+                            else ('heuristico+ML(USADO)' if sig.ml_prob > 0.5 and sig.lado != ''
+                                  else 'heuristico+ML(BLOQUEADO)')
+                        ),
                         model_version=self.config.get('ml_modelo', '').split('\\')[-1] if self.config.get('ml_modelo') else '',
                     )
                     self.journal.registrar(entry)
@@ -507,15 +624,18 @@ class App:
 
     def get_features(self):
         feat = self.signal.get_features()
-        # Fallback: se o principal não tem dados, injeta dados do contexto
+        # Sempre informar ao dashboard qual e o ativo principal
         principal = self.ativo_principal
+        feat['_principal'] = principal
+        feat['_contexto'] = self.ativo_contexto
+        # Fallback: se o principal nao tem dados, injeta dados do contexto
         if principal not in feat or not feat[principal].get('preco_fim'):
             for sym, f in feat.items():
                 if sym.startswith('_'):
                     continue
                 if f.get('preco_fim') and f.get('preco_fim') > 0:
                     feat[principal] = f
-                    feat['_principal'] = sym  # avisa o dashboard
+                    feat['_principal_fallback'] = sym  # avisa que e fallback
                     break
         return feat
 
@@ -530,11 +650,13 @@ class App:
         return self.metrics.get_estatisticas()
 
     def get_memoria(self):
+        # v12.4 (Fase 6): Estado de risco vem do RiskEngine (fonte única)
+        re = self.risk_engine
         return self.market_state.get_memoria(
-            circuit_breaker_nivel=self.risk.circuit_breaker_nivel,
-            trades_dia=self.risk.trades_dia,
-            pnl_dia=self.risk.pnl_dia,
-            perdas_consecutivas=self.risk.perdas_consecutivas,
+            circuit_breaker_nivel=re.circuit_breaker_nivel,
+            trades_dia=re.trades_dia,
+            pnl_dia=re.pnl_dia,
+            perdas_consecutivas=re.perdas_consecutivas,
             confianca_ewma=self.position.confianca_ewma,
             sinal_confirmado=self.position.sinal_confirmado,
         )
