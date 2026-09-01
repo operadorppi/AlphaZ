@@ -86,11 +86,13 @@ def processar_dia(ativo, ctx, data_file, SAVE_DIR, ativos_conhecidos=None):
                 table = pq.read_table(tf)
                 df = table.to_pandas()
                 for _, row in df.iterrows():
+                    # v14.1: schema usa ts_ns e quantidade
+                    ts_ns = row.get('ts_ns', row.get('ts_ms', 0))
+                    ts_ms = ts_ns // 1_000_000 if ts_ns > 1e15 else ts_ns
                     negocios.append({
-                        'ativo': row['ativo'], 'ts_ms': int(row['ts_ms']),
-                        'preco': float(row['preco']), 'qtd': int(row['qtd']),
-                        'agressor': row['agressor'],
-                        'compradora': row.get('compradora', ''),
+                        'ativo': row['ativo'], 'ts_ms': int(ts_ms),
+                        'preco': float(row['preco']), 'qtd': int(row.get('quantidade', row.get('qtd', 0))),
+                        'agressor': row['agressor'], 'compradora': row.get('compradora', ''),
                         'vendedora': row.get('vendedora', ''),
                     })
             except Exception as e:
@@ -114,10 +116,13 @@ def processar_dia(ativo, ctx, data_file, SAVE_DIR, ativos_conhecidos=None):
                 table = pq.read_table(bf)
                 df = table.to_pandas()
                 for _, row in df.iterrows():
+                    # v14.1: schema usa ts_ns e bid_vol_total/ask_vol_total
+                    ts_ns = row.get('ts_ns', row.get('ts_ms', 0))
+                    ts_ms = ts_ns // 1_000_000 if ts_ns > 1e15 else ts_ns
                     book.append({
-                        'ativo': row['ativo'], 'ts_ms': int(row['ts_ms']),
-                        'bid_vol': int(row.get('bid_vol', 0)),
-                        'ask_vol': int(row.get('ask_vol', 0)),
+                        'ativo': row['ativo'], 'ts_ms': int(ts_ms),
+                        'bid_vol': int(row.get('bid_vol_total', row.get('bid_vol', 0))),
+                        'ask_vol': int(row.get('ask_vol_total', row.get('ask_vol', 0))),
                     })
             except Exception as e:
                 print(f'  Erro ao ler {bf}: {e}')

@@ -27,14 +27,20 @@ class ReplayAdapter(MarketDataSource):
         self.ativo = ativo
 
         # Buscar arquivos Parquet hive
+        # Converter ativo (ex: WINV26) para asset_partition (ex: WIN)
+        asset_part = ativo
+        if ativo:
+            for suffix in ('V26', 'V25', 'V24', 'M26', 'M25', 'M24', 'U26', 'U25'):
+                if ativo.endswith(suffix):
+                    asset_part = ativo[:-len(suffix)]
+                    break
         self._tt_files = find_hive_files(base_dir, dia_str=dia_str,
-                                         data_type='TT', ativo=ativo)
+                                         data_type='TT', asset=asset_part)
         self._book_files = find_hive_files(base_dir, dia_str=dia_str,
-                                           data_type='BOOK', ativo=ativo)
+                                           data_type='BOOK', asset=asset_part)
 
         # Fallback: formato legado (JSONL)
         if not self._tt_files and session_ts:
-            from adapters.file_storage import find_hive_files
             # Tentar JSONL legado
             legado_neg = self.base_dir / f"raw_negocios_ms_{session_ts}.jsonl"
             if legado_neg.exists():
@@ -62,21 +68,24 @@ class ReplayAdapter(MarketDataSource):
                 table = pq.read_table(tt_file)
                 # Converter para dicts
                 records = table.to_pydict()
-                n_rows = len(records.get('ts_ms', []))
+                n_rows = len(records.get('ts_ns', records.get('ts_ms', [])))
 
                 for i in range(n_rows):
-                    ts = records['ts_ms'][i]
+                    # v14.1: schema usa ts_ns e quantidade
+                    ts_ns = records.get('ts_ns', [0]*n_rows)[i]
+                    ts_ms = ts_ns // 1_000_000 if ts_ns > 1e15 else (records.get('ts_ms', [0]*n_rows)[i])
                     is_rlp = records.get('is_rlp', [False]*n_rows)[i] if 'is_rlp' in records else False
+                    recv_ns = records.get('received_at_ns', [ts_ns]*n_rows)[i] if 'received_at_ns' in records else ts_ns
 
                     trade = TradeEvent(
                         symbol=records['ativo'][i],
-                        timestamp_ms=ts,
+                        timestamp_ms=ts_ms,
                         price=records['preco'][i],
-                        quantity=records['qtd'][i],
+                        quantity=int(records.get('quantidade', records.get('qtd', [0]*n_rows))[i]),
                         aggressor=records['agressor'][i],
                         buyer=records.get('compradora', ['']*n_rows)[i],
                         seller=records.get('vendedora', ['']*n_rows)[i],
-                        received_at_ns=ts * 1_000_000
+                        received_at_ns=recv_ns,
                     )
 
                     event_type = 'RLP' if is_rlp else 'TRADE'
@@ -86,7 +95,7 @@ class ReplayAdapter(MarketDataSource):
                     yield MarketEvent(
                         type=event_type,
                         payload=trade,
-                        timestamp_ms=ts,
+                        timestamp_ms=ts_ms,
                         symbol=trade.symbol,
                         janela_id=janela_id,
                         window_name=window_name,
