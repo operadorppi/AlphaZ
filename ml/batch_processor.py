@@ -71,24 +71,63 @@ def processar_dia(ativo, ctx, data_file, SAVE_DIR, ativos_conhecidos=None):
     if ativos_conhecidos is None:
         ativos_conhecidos = [ativo] + ([ctx] if ctx else [])
     
-    # Carregar negócios - buscar todos os arquivos do dia
-    neg_files = sorted(Path(SAVE_DIR).glob(f'raw_negocios_ms_{data_str}*.jsonl'))
-    if not neg_files:
-        print(f'  Arquivos de negócios não encontrados para {data_str}')
-        return []
+    # v14: Buscar dados na estrutura Hive Parquet OU JSONL legado
+    from adapters.file_storage import find_hive_files
+    
+    # Tentar Hive Parquet primeiro
+    tt_files = find_hive_files(SAVE_DIR, dia_str=data_str, data_type='TT')
+    book_files = find_hive_files(SAVE_DIR, dia_str=data_str, data_type='BOOK')
     
     negocios = []
-    for nf in neg_files:
-        negocios.extend(carregar_negocios(nf))
-    print(f'  Carregados {len(negocios)} negócios de {len(neg_files)} arquivos')
+    if tt_files:
+        import pyarrow.parquet as pq
+        for tf in tt_files:
+            try:
+                table = pq.read_table(tf)
+                df = table.to_pandas()
+                for _, row in df.iterrows():
+                    negocios.append({
+                        'ativo': row['ativo'], 'ts_ms': int(row['ts_ms']),
+                        'preco': float(row['preco']), 'qtd': int(row['qtd']),
+                        'agressor': row['agressor'],
+                        'compradora': row.get('compradora', ''),
+                        'vendedora': row.get('vendedora', ''),
+                    })
+            except Exception as e:
+                print(f'  Erro ao ler {tf}: {e}')
+        print(f'  Carregados {len(negocios)} negócios de {len(tt_files)} Parquet hive')
+    else:
+        # Fallback: JSONL legado
+        neg_files = sorted(Path(SAVE_DIR).glob(f'raw_negocios_ms_{data_str}*.jsonl'))
+        if not neg_files:
+            print(f'  Arquivos de negócios não encontrados para {data_str}')
+            return []
+        for nf in neg_files:
+            negocios.extend(carregar_negocios(nf))
+        print(f'  Carregados {len(negocios)} negócios de {len(neg_files)} JSONL legado')
     
-    # Carregar book - buscar todos os arquivos do dia
-    book_files = sorted(Path(SAVE_DIR).glob(f'raw_book_ms_{data_str}*.jsonl'))
     book = []
-    for bf in book_files:
-        book.extend(carregar_book(bf))
-    if book:
-        print(f'  Carregados {len(book)} snapshots de book de {len(book_files)} arquivos')
+    if book_files:
+        import pyarrow.parquet as pq
+        for bf in book_files:
+            try:
+                table = pq.read_table(bf)
+                df = table.to_pandas()
+                for _, row in df.iterrows():
+                    book.append({
+                        'ativo': row['ativo'], 'ts_ms': int(row['ts_ms']),
+                        'bid_vol': int(row.get('bid_vol', 0)),
+                        'ask_vol': int(row.get('ask_vol', 0)),
+                    })
+            except Exception as e:
+                print(f'  Erro ao ler {bf}: {e}')
+        print(f'  Carregados {len(book)} book snapshots de {len(book_files)} Parquet hive')
+    else:
+        book_files_jsonl = sorted(Path(SAVE_DIR).glob(f'raw_book_ms_{data_str}*.jsonl'))
+        for bf in book_files_jsonl:
+            book.extend(carregar_book(bf))
+        if book:
+            print(f'  Carregados {len(book)} book snapshots de {len(book_files_jsonl)} JSONL legado')
     
     # Processar com GeradorJanelas
     gerador = GeradorJanelas(

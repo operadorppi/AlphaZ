@@ -76,11 +76,14 @@ class BookSnapshot:
 @dataclass(frozen=True)
 class MarketEvent:
     """Envelope unificado para eventos de mercado."""
-    type: str           # 'TRADE' ou 'BOOK'
+    type: str           # 'TRADE', 'BOOK', 'RLP'
     payload: Union[TradeEvent, BookSnapshot]
     timestamp_ms: int
     symbol: str
     schema_version: str = "1.0"
+    janela_id: int = 0         # v14: índice da janela RTD (0-11)
+    window_name: str = ""      # v14: 'T&T0', 'BOOK1', etc.
+    is_rlp: bool = False       # v14: True se janela RLP
 
 
 @dataclass(frozen=True)
@@ -117,6 +120,8 @@ class Signal:
     ml_prob: float = 0.5
     preco_ref: float = 0.0
     horizonte: int = 60
+    quantidade: int = 1       # N - quantidade de contratos (para cálculo de exposure)
+    valor_ponto: float = 0.20  # V - valor do ponto em moeda (para cálculo de exposure)
     schema_version: str = "1.0"
 
     def __post_init__(self):

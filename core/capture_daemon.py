@@ -39,7 +39,7 @@ log = logging.getLogger(__name__)
 # Tamanho máximo da fila interna (eventos que aguardam gravação)
 _MAX_QUEUE = 100_000
 # Intervalo de flush para disco (segundos)
-_FLUSH_INTERVAL_S = 2.0
+_FLUSH_INTERVAL_S = 0.5
 # Intervalo de log de saúde (segundos)
 _HEALTH_LOG_INTERVAL_S = 300  # 5 min
 
@@ -194,7 +194,8 @@ class CaptureDaemon:
             log.error(f"[CAPTURE-DAEMON] OVERFLOW: {dropped} negócios descartados "
                       f"(fila cheia {_MAX_QUEUE})")
 
-    def registrar_book(self, ativo, ts_ms, snap, bid_vol, ask_vol, levels=None):
+    def registrar_book(self, ativo, ts_ms, snap, bid_vol, ask_vol, levels=None,
+                       janela_id=0, window_name='', received_at_ns=0):
         """Registra snapshot de book recebido do RTD.
 
         Args:
@@ -204,12 +205,16 @@ class CaptureDaemon:
             bid_vol: volume total bid
             ask_vol: volume total ask
             levels: dict com listas por nível (opcional)
+            janela_id: índice da janela RTD
+            window_name: nome da janela (ex: 'BOOK1')
+            received_at_ns: timestamp de recebimento em nanosegundos
         """
         with self._stats_lock:
             self._stats['events_received'] += 1
             self._stats['book_recebidos'] += 1
 
-        item = ('book', (ativo, ts_ms, snap, bid_vol, ask_vol, levels))
+        item = ('book', (ativo, ts_ms, snap, bid_vol, ask_vol, levels,
+                         janela_id, window_name, received_at_ns))
         dropped = self._enqueue(item, n_events=1)
         if dropped > 0:
             with self._stats_lock:
@@ -220,6 +225,32 @@ class CaptureDaemon:
             self._last_drop_reason = f'queue_full (book, {dropped} eventos)'
             self._last_drop_ts = time.time()
             log.error(f"[CAPTURE-DAEMON] OVERFLOW: {dropped} book snapshots descartados "
+                      f"(fila cheia {_MAX_QUEUE})")
+
+    def registrar_rlp(self, novos):
+        """v12.5: Registra registros RLP (Registro de Livros e Posicoes).
+
+        Args:
+            novos: lista de tuplas (sym, tms, preco, qtd, agr, comp, vend)
+        """
+        if not novos:
+            return
+
+        n = len(novos)
+        with self._stats_lock:
+            self._stats['events_received'] += n
+            self._stats['rlp_recebidos'] = self._stats.get('rlp_recebidos', 0) + n
+
+        dropped = self._enqueue(('rlp', novos), n_events=len(novos))
+        if dropped > 0:
+            with self._stats_lock:
+                self._stats['events_dropped'] += dropped
+                self._stats['rlp_dropped'] = self._stats.get('rlp_dropped', 0) + dropped
+                self._stats['overflow_count'] += 1
+                self._stats['data_loss_detected'] = True
+            self._last_drop_reason = f'queue_full (rlp, {dropped} eventos)'
+            self._last_drop_ts = time.time()
+            log.error(f"[CAPTURE-DAEMON] OVERFLOW: {dropped} RLP descartados "
                       f"(fila cheia {_MAX_QUEUE})")
 
     def _enqueue(self, item, n_events=1):
@@ -347,11 +378,22 @@ class CaptureDaemon:
                             self._stats['events_processed'] += len(dados)
                             self._stats['negocios_processados'] += len(dados)
                     elif tipo == 'book':
-                        ativo, ts_ms, snap, bid_vol, ask_vol, levels = dados
-                        self._storage.registrar_book(ativo, ts_ms, snap, bid_vol, ask_vol, levels=levels)
+                        ativo, ts_ms, snap, bid_vol, ask_vol, levels = dados[:6]
+                        janela_id = dados[6] if len(dados) > 6 else 0
+                        window_name = dados[7] if len(dados) > 7 else ''
+                        received_at_ns = dados[8] if len(dados) > 8 else 0
+                        self._storage.registrar_book(ativo, ts_ms, snap, bid_vol, ask_vol,
+                                                     levels=levels, janela_id=janela_id,
+                                                     window_name=window_name,
+                                                     received_at_ns=received_at_ns)
                         with self._stats_lock:
                             self._stats['events_processed'] += 1
                             self._stats['book_processados'] += 1
+                    elif tipo == 'rlp':
+                        self._storage.registrar_rlp(dados)
+                        with self._stats_lock:
+                            self._stats['events_processed'] += len(dados)
+                            self._stats['rlp_processados'] = self._stats.get('rlp_processados', 0) + len(dados)
                 except Exception as e:
                     with self._stats_lock:
                         self._stats['events_error'] += 1
@@ -395,13 +437,20 @@ class CaptureDaemon:
         draining = 0
         while not self._queue.empty():
             try:
-                tipo, dados = self._queue.get_nowait()
-                if tipo == 'neg':
-                    self._storage.registrar_negocios(dados)
-                elif tipo == 'book':
-                    ativo, ts_ms, snap, bid_vol, ask_vol, levels = dados
-                    self._storage.registrar_book(ativo, ts_ms, snap, bid_vol, ask_vol, levels=levels)
-                draining += 1
+                tipo, dados = self._queue.get_nowait()                if tipo == 'neg':
+                        self._storage.registrar_negocios(dados)
+                    elif tipo == 'book':
+                        ativo, ts_ms, snap, bid_vol, ask_vol, levels = dados[:6]
+                        janela_id = dados[6] if len(dados) > 6 else 0
+                        window_name = dados[7] if len(dados) > 7 else ''
+                        received_at_ns = dados[8] if len(dados) > 8 else 0
+                        self._storage.registrar_book(ativo, ts_ms, snap, bid_vol, ask_vol,
+                                                     levels=levels, janela_id=janela_id,
+                                                     window_name=window_name,
+                                                     received_at_ns=received_at_ns)
+                    elif tipo == 'rlp':
+                        self._storage.registrar_rlp(dados)
+                    draining += 1
             except queue.Empty:
                 break
             except Exception as e:

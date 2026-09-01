@@ -1,3 +1,145 @@
+## v14.1 — Schema explícito + validação + bug threshold (01/09/2026)
+
+### Problema
+
+1. Schema inferido: `pa.Table.from_pylist()` inferia tipos inconsistentes entre arquivos
+2. Bug threshold: `1e12` era pequeno demais — timestamps atuais em ms (~1.78e12) excediam o threshold
+3. CaptureDaemon não passava janela_id/window_name/received_at_ns para BOOK
+4. Campo `ofi` ausente em algumas rows do BOOK
+5. Sem rotina de validação automática
+
+### Correções
+
+1. **Schemas explícitos PyArrow** — `TT_SCHEMA` (13 colunas) e `BOOK_SCHEMA` (16 colunas) com tipos definidos
+2. **Threshold corrigido** — `1e12` → `1e17` (3 ocorrências em file_storage.py)
+3. **CaptureDaemon.registrar_book** — agora aceita e passa janela_id, window_name, received_at_ns
+4. **Campo ofi** — sempre presente (None quando não disponível)
+5. **validar_raw_hive.py** — 47 checks automáticos: estrutura, schema, integridade, PyArrow Dataset
+
+### Validação
+
+- 10/10 fluxos OK (4 BOOK + 6 TT)
+- 47/47 checks de validação OK
+- PyArrow Dataset com filtros pushdown funcional
+- Relatório completo: docs/RELATORIO_RAW_HIVE_v14.md
+
+---
+
+## v14.0 — Armazenamento RAW em Parquet + Hive (01/09/2026)
+
+### Problema
+
+Dados RAW eram gravados em JSONL flat files — sem organização, misturando ativos, sem compressão, sem identificação de janela de origem.
+
+### Solução: Parquet + Hive Partitioning
+
+**Estrutura de diretórios:**
+```
+D:\MarketData\Profit\RAW\
+  data_type=TT\
+    date=YYYYMMDD\
+      asset=IND\
+        part-0000.parquet
+      asset=WIN\
+        part-0000.parquet
+      asset=WIN_RLP\
+        part-0000.parquet
+      asset=WDO\
+        part-0000.parquet
+      asset=WDO_RLP\
+        part-0000.parquet
+      asset=DOL\
+        part-0000.parquet
+  data_type=BOOK\
+    date=YYYYMMDD\
+      asset=IND\
+        part-0000.parquet
+      asset=WIN\
+        part-0000.parquet
+      asset=WDO\
+        part-0000.parquet
+      asset=DOL\
+        part-0000.parquet
+```
+
+**Especificações:**
+- Engine: PyArrow
+- Compressão: Snappy
+- Imutável: nunca sobrescrever dados RAW gravados
+- Identificação de janela via colunas `janela_id` e `window_name`
+
+**Colunas TT:** ts_ms, ativo, asset_partition, preco, qtd, agressor, compradora, vendedora, janela_id, window_name, is_rlp
+
+**Colunas BOOK:** ts_ms, ativo, asset_partition, bid_vol, ask_vol, por_corretora, janela_id, window_name, levels_*, ofi
+
+### Arquivos Alterados
+
+| Arquivo | Mudança |
+|---------|--------|
+| `core/contracts.py` | MarketEvent: +janela_id, +window_name, +is_rlp |
+| `adapters/profit_rtd.py` | Yield MarketEvent com janela_id do mapa RTD |
+| `core/app.py` | Passar janela_id nos registrar_negocios/book/rlp |
+| `adapters/file_storage.py` | Reescrito: Parquet + Hive + Snappy |
+| `adapters/replay.py` | Lê Parquet hive |
+| `ml/batch_processor.py` | Lê Parquet hive (fallback JSONL legado) |
+| `scripts/converter_brutos_parquet.py` | Validação de dados hive (não precisa converter) |
+
+---
+
+## v13.2 — Gravação Separada por Ativo: JSONL Por Ativo (01/09/2026)
+
+### Problema
+
+Negócios, Book e RLP eram gravados em **um único JSONL** para todos os ativos. Se o campo `ativo` viesse vazio ou com bug de mapeamento, os dados ficavam inseparáveis. O RLP misturava WIN e WDO no mesmo arquivo.
+
+### Solução: Arquivo Por Ativo
+
+Cada tipo agora gera **um arquivo por ativo**:
+
+| Tipo | Antes | Depois |
+|------|-------|--------|
+| Negócios | `raw_negocios_ms_{session}.jsonl` (misturado) | `raw_negocios_ms_{session}_WINV26.jsonl` |
+| Book | `raw_book_ms_{session}.jsonl` (misturado) | `raw_book_ms_{session}_WINV26.jsonl` |
+| RLP | `raw_rlp_ms_{session}.jsonl` (misturado) | `raw_rlp_ms_{session}_WINV26.jsonl` |
+
+### Arquitetura
+
+```
+ANTES:
+  _buf_neg = []          ← lista única, todos os ativos
+  _buf_book = []         ← lista única, todos os ativos
+  _fp_neg = None         ← um file handle único
+  _fp_book = None        ← um file handle único
+
+DEPOIS:
+  _buf_neg = {}          ← dict por ativo {ativo: [json_str, ...]}
+  _buf_book = {}         ← dict por ativo {ativo: [json_str, ...]}
+  _buf_rlp = {}          ← dict por ativo (já era)
+  _fp_neg = {}           ← dict por ativo {ativo: file_handle}
+  _fp_book = {}          ← dict por ativo {ativo: file_handle}
+  _fp_rlp = {}           ← dict por ativo (já era)
+```
+
+### Métodos
+
+- `_abrir(tipo, ativo)` — abre arquivo para tipo+ativo
+- `_get_fp(tipo, ativo)` — retorna file pointer, criando se necessário
+- `_flush_ativo(tipo, ativo)` — flush do buffer de um tipo+ativo
+- `flush()` — itera por todos os tipos e ativos
+- `fechar()` — fecha todos os file handles por ativo
+
+### Bug Fix: Drain no Shutdown
+
+O `_drain_queue()` do `capture_daemon.py` não drenava dados RLP no shutdown — eram descartados silenciosamente. Corrigido para incluir `elif tipo == 'rlp'`.
+
+### Compatibilidade
+
+- O `converter_brutos_parquet.py` já funciona com ambos os formatos (misturado e separado)
+- `split_by_ativo()` lê o campo `ativo` de cada registro — funciona sempre
+- Arquivos antigos continuam legíveis
+
+---
+
 ## v13.0 — Fix Crítico: TRADE Pipeline Completo + 4 Ativos (01/09/2026)
 
 ### Bug Crítico Corrigido (P0)
