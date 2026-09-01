@@ -7,8 +7,7 @@ echo ============================================================
 echo.
 cd /d "%~dp0.."
 echo [%date% %time%] Iniciando watchdog...
-python watchdog.py WINV26 WDOU26
+python watchdog.py WINV26 WDOV26 INDV26 DOLV26
 echo.
 echo [%date% %time%] Motor encerrou.
 echo.
-rem (sem pause - Task Scheduler nao espera input)
