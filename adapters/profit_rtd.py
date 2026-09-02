@@ -58,6 +58,7 @@ class ProfitRTDAdapter(MarketDataSource):
         self._vistos_por_linha = defaultdict(OrderedDict)  # (sym) -> OrderedDict[(linha, DAT) -> True] (v14.4)
         self._tt_recebidos = defaultdict(int)  # (sym) -> total trades received (running counter)
         self._baseline_pending = defaultdict(lambda: True)
+        self._tt_diag = defaultdict(lambda: defaultdict(int))  # v14.5: diagnostics per stage
         self._cell_lote = defaultdict(dict)  # (sym, linha) -> {field: lote_num} — ciclo RefreshData de cada campo
         self._lote_atual = 0  # contador de ciclos RefreshData
         self._book_cells = defaultdict(lambda: defaultdict(dict)) # (sym) -> {linha: {field: val}}
@@ -214,203 +215,209 @@ class ProfitRTDAdapter(MarketDataSource):
                 kind, sym, field, linha = info
 
                 if kind == "tt":
-                    # Lógica de Dedup (Fase 1) + coerência de lote + DAT-primário (v14.4)
+                    # v14.5: Lógica de Dedup + coerência de lote + DAT-primário
+                    # O gatilho de coerência dispara em QUALQUER um dos 3 campos
+                    # chave (DAT/PRE/QUL), não só no DAT. Isso resolve o race
+                    # condition onde DAT chega antes de PRE/QUL no mesmo ciclo.
                     cell = self._book_cells[sym][linha]
                     cell[field] = val
                     lotes_linha = self._cell_lote[(sym, linha)]
                     lotes_linha[field] = self._lote_atual
+                    diag = self._tt_diag[sym]
                     
-                    # ============================================================
-                    # DEDUP PRIMÁRIO POR DAT (v14.4)
-                    # ============================================================
-                    # A janela T&T mostra ~1000 linhas; cada trade novo faz TODAS
-                    # as linhas descEREM uma posição e o RTD re-entrega TODAS elas
-                    # no MESMO ciclo (mudaram juntas → passam na coerência de lote).
-                    # O conteúdo da linha move como uma UNIDADE: se o DAT da linha
-                    # não mudou desde a última emissão desta linha, é re-entrega
-                    # do mesmo trade → descartar ANTES de montar assinatura.
-                    # Isso elimina ~90% do volume que só morria no ordering detector.
-                    # ============================================================
+                    # Só processa quando algum dos 3 campos-chave chega
+                    if field not in ('DAT', 'PRE', 'QUL'):
+                        continue
+                    
+                    # Coerência: todos os 3 campos devem ter o mesmo lote
+                    lote_ref = lotes_linha.get('DAT', 0)
+                    if (lote_ref == 0
+                            or lotes_linha.get('PRE', 0) != lote_ref
+                            or lotes_linha.get('QUL', 0) != lote_ref):
+                        if field == 'DAT':
+                            diag['dat_received'] += 1
+                            diag['coherence_fail'] += 1
+                        continue  # Aguardar convergência — re-avalia no próximo campo
+                    
                     if field == 'DAT':
-                        # Coerência de lote (mantida): PRE/QUL do mesmo ciclo
-                        lote_dat = lotes_linha.get('DAT', 0)
-                        if (lotes_linha.get('PRE', 0) != lote_dat
-                                or lotes_linha.get('QUL', 0) != lote_dat):
-                            continue  # Campos de ciclos diferentes — aguardar convergência
-                        
-                        dat_str = sstr(val)
-                        # DAT-primário: se esta linha JÁ EMITIU este DAT, qualquer
-                        # re-entrega é o mesmo trade (a linha move como unidade).
-                        # A chave é registrada SÓ NA EMISSÃO (mais abaixo), não na
-                        # primeira chegada — senão bloquearia a própria emissão.
-                        chave_linha = (sym, linha, dat_str)
-                        if chave_linha in self._vistos_por_linha[sym]:
-                            continue  # Re-entrega do mesmo trade nesta linha — descartar
+                        diag['dat_received'] += 1
                     
-                    if field == 'DAT':  # Gatilho de processamento da linha
-                        pre = fnum(cell.get('PRE'))
-                        if pre <= 0: continue
-                        qtd = fint(cell.get('QUL'))
-                        if qtd <= 0: continue  # RTD envia qtd=0 para ativos sem dados reais
-                        
-                        # Assinatura determinística do negócio (2ª linha de defesa).
-                        # Campos: DAT + ACP + PRE + QUL + AVD + AGR + AGAG
-                        sig = (
-                            sstr(cell.get('DAT')),
-                            sstr(cell.get('ACP')),
-                            pre,
-                            qtd,
-                            sstr(cell.get('AVD')),
-                            sstr(cell.get('AGR')),
-                            sstr(cell.get('AGAG')),
-                        )
-                        
-                        # Primeiro refresh absorve como baseline (evita emitir
-                        # histórico acumulado na primeira chamada de RefreshData)
-                        if self._baseline_pending[sym]:
-                            self._vistos_tt[sym][sig] = True
-                            continue
+                    # DAT-primário: se esta linha JÁ EMITIU este DAT
+                    dat_str = sstr(cell.get('DAT'))
+                    chave_linha = (sym, linha, dat_str)
+                    if chave_linha in self._vistos_por_linha[sym]:
+                        diag['dat_primary_dup'] += 1
+                        continue  # Re-entrega do mesmo trade nesta linha — descartar
+                    
+                    # Validação de conteúdo
+                    pre = fnum(cell.get('PRE'))
+                    if pre <= 0:
+                        diag['pre_zero'] += 1
+                        continue
+                    qtd = fint(cell.get('QUL'))
+                    if qtd <= 0:
+                        diag['qtd_zero'] += 1
+                        continue
+                    
+                    # Assinatura determinística do negócio (2ª linha de defesa).
+                    # Campos: DAT + ACP + PRE + QUL + AVD + AGR + AGAG
+                    sig = (
+                        sstr(cell.get('DAT')),
+                        sstr(cell.get('ACP')),
+                        pre,
+                        qtd,
+                        sstr(cell.get('AVD')),
+                        sstr(cell.get('AGR')),
+                        sstr(cell.get('AGAG')),
+                    )
+                    
+                    # Primeiro refresh absorve como baseline (evita emitir
+                    # histórico acumulado na primeira chamada de RefreshData)
+                    if self._baseline_pending[sym]:
+                        self._vistos_tt[sym][sig] = True
+                        diag['baseline_absorbed'] += 1
+                        continue
 
-                        # DEDUP por assinatura (2ª linha de defesa — pega trades
-                        # que aparecem em linhas diferentes entre ciclos)
-                        if sig in self._vistos_tt[sym]:
-                            continue  # Duplicata — descartar silenciosamente
-                        
-                        # Marcar como visto (LRU eviction se exceder limite)
-                        vistos = self._vistos_tt[sym]
-                        vistos[sig] = True
-                        self._tt_recebidos[sym] += 1
-                        if len(vistos) > self._dedup_max_per_ativo:
-                            # Remove o item mais antigo (primeiro inserido)
-                            vistos.popitem(last=False)
-                        
-                        # v14.4: registrar chave DAT-primária SÓ NA EMISSÃO
-                        self._vistos_por_linha[sym][chave_linha] = True
-                        if len(self._vistos_por_linha[sym]) > self._dedup_max_per_ativo:
-                            self._vistos_por_linha[sym].popitem(last=False)
-                        
-                        # Fase 2: Preservar timestamp do mercado (DAT do Profit)
-                        # NUNCA usar wall clock como timestamp do evento.
-                        dat_str = sstr(cell.get('DAT'))
-                        event_ts_ms = dat_to_epoch_ms(dat_str)
-                        receive_ns = now_ns()
+                    # DEDUP por assinatura (2ª linha de defesa — pega trades
+                    # que aparecem em linhas diferentes entre ciclos)
+                    if sig in self._vistos_tt[sym]:
+                        diag['sig_dup'] += 1
+                        continue  # Duplicata — descartar silenciosamente
+                    
+                    # Marcar como visto (LRU eviction se exceder limite)
+                    vistos = self._vistos_tt[sym]
+                    vistos[sig] = True
+                    self._tt_recebidos[sym] += 1
+                    if len(vistos) > self._dedup_max_per_ativo:
+                        vistos.popitem(last=False)
+                    
+                    # v14.4: registrar chave DAT-primária SÓ NA EMISSÃO
+                    self._vistos_por_linha[sym][chave_linha] = True
+                    if len(self._vistos_por_linha[sym]) > self._dedup_max_per_ativo:
+                        self._vistos_por_linha[sym].popitem(last=False)
+                    
+                    # Fase 2: Preservar timestamp do mercado (DAT do Profit)
+                    # NUNCA usar wall clock como timestamp do evento.
+                    dat_str = sstr(cell.get('DAT'))
+                    event_ts_ms = dat_to_epoch_ms(dat_str)
+                    receive_ns = now_ns()
 
-                        # Se DAT invalido, usar receive_ts como fallback (documentado)
-                        if event_ts_ms <= 0:
-                            event_ts_ms = receive_ns // 1_000_000
-                            log.warning(f"[RTD] DAT invalido '{dat_str}' para {sym}, usando receive_ts como fallback")
+                    # Se DAT invalido, usar receive_ts como fallback (documentado)
+                    if event_ts_ms <= 0:
+                        event_ts_ms = receive_ns // 1_000_000
+                        log.warning(f"[RTD] DAT invalido '{dat_str}' para {sym}, usando receive_ts como fallback")
 
-                        # Validar timestamp (rejeitar se muito no futuro/passado)
-                        valido, motivo = validate_event_ts(event_ts_ms, receive_ns)
-                        if not valido:
-                            log.warning(f"[RTD] {sym}: timestamp rejeitado: {motivo} (DAT={dat_str})")
-                            continue
+                    # Validar timestamp (rejeitar se muito no futuro/passado)
+                    valido, motivo = validate_event_ts(event_ts_ms, receive_ns)
+                    if not valido:
+                        log.warning(f"[RTD] {sym}: timestamp rejeitado: {motivo} (DAT={dat_str})")
+                        continue
 
-                        # Fase 3: Detectar anomalias temporais
-                        ord_result = self._ordering_detector.check(sym, event_ts_ms, receive_ns)
+                    # Fase 3: Detectar anomalias temporais
+                    ord_result = self._ordering_detector.check(sym, event_ts_ms, receive_ns)
 
-                        if ord_result.action == "REJECT":
-                            # Duplicatas e timestamps invalidos sao rejeitados
-                            continue
+                    if ord_result.action == "REJECT":
+                        # Duplicatas e timestamps invalidos sao rejeitados
+                        continue
 
-                        if ord_result.is_late:
-                            log.debug(f"[RTD] {sym}: evento atrasado lag={ord_result.lag_ms}ms")
-                        if ord_result.is_out_of_order:
-                            log.warning(f"[RTD] {sym}: fora de ordem gap={ord_result.gap_ms}ms ({ord_result.reason})")
-                        if ord_result.is_forward_jump:
-                            log.warning(f"[RTD] {sym}: salto temporal {ord_result.gap_ms}ms")
-                        if ord_result.is_backward_sequence:
-                            log.warning(f"[RTD] {sym}: sequencia regressiva ({ord_result.reason})")
+                    if ord_result.is_late:
+                        log.debug(f"[RTD] {sym}: evento atrasado lag={ord_result.lag_ms}ms")
+                    if ord_result.is_out_of_order:
+                        log.warning(f"[RTD] {sym}: fora de ordem gap={ord_result.gap_ms}ms ({ord_result.reason})")
+                    if ord_result.is_forward_jump:
+                        log.warning(f"[RTD] {sym}: salto temporal {ord_result.gap_ms}ms")
+                    if ord_result.is_backward_sequence:
+                        log.warning(f"[RTD] {sym}: sequencia regressiva ({ord_result.reason})")
 
-                        seq_id = next_sequence_id()
-                        trade = TradeEvent(
-                            symbol=sym, timestamp_ms=event_ts_ms, price=pre,
-                            quantity=qtd,
-                            aggressor="Comprador" if "compr" in sstr(cell.get('AGR')).lower() else "Vendedor",
-                            buyer=sstr(cell.get('ACP')), seller=sstr(cell.get('AVD')),
-                            received_at_ns=receive_ns,
-                            sequence_id=seq_id,
-                        )
-                        # v14: incluir janela_id no MarketEvent
-                        janela_idx = next((k for k, v in self._tt_map.items() if v == sym), 0)
-                        yield MarketEvent(type='TRADE', payload=trade, timestamp_ms=event_ts_ms,
-                                          symbol=sym, janela_id=janela_idx,
-                                          window_name=f'T&T{janela_idx}')
+                    seq_id = next_sequence_id()
+                    trade = TradeEvent(
+                        symbol=sym, timestamp_ms=event_ts_ms, price=pre,
+                        quantity=qtd,
+                        aggressor="Comprador" if "compr" in sstr(cell.get('AGR')).lower() else "Vendedor",
+                        buyer=sstr(cell.get('ACP')), seller=sstr(cell.get('AVD')),
+                        received_at_ns=receive_ns,
+                        sequence_id=seq_id,
+                    )
+                    # v14: incluir janela_id no MarketEvent
+                    janela_idx = next((k for k, v in self._tt_map.items() if v == sym), 0)
+                    yield MarketEvent(type='TRADE', payload=trade, timestamp_ms=event_ts_ms,
+                                      symbol=sym, janela_id=janela_idx,
+                                      window_name=f'T&T{janela_idx}')
 
                 elif kind == "rlp":
-                    # v12.5: RLP (Registro de Livros e Posicoes) - mesmo fluxo do T&T
-                    # mas com flag separada para gravacao distinta
+                    # v14.5: RLP — mesmo fix de coerência do fluxo TT
                     cell = self._book_cells[sym][linha]
                     cell[field] = val
                     lotes_linha = self._cell_lote[(sym, linha)]
                     lotes_linha[field] = self._lote_atual
                     
-                    # Dedup DAT-primário (v14.4, mesma proteção do fluxo TT)
-                    if field == 'DAT':
-                        lote_dat = lotes_linha.get('DAT', 0)
-                        if (lotes_linha.get('PRE', 0) != lote_dat
-                                or lotes_linha.get('QUL', 0) != lote_dat):
-                            continue
-                        
-                        dat_str = sstr(val)
-                        chave_linha = ('rlp', sym, linha, dat_str)
-                        if chave_linha in self._vistos_por_linha[sym]:
-                            continue  # Re-entrega — chave registrada só na emissão
+                    if field not in ('DAT', 'PRE', 'QUL'):
+                        continue
                     
-                    if field == 'DAT':
-                        pre = fnum(cell.get('PRE'))
-                        if pre <= 0: continue
-                        qtd = fint(cell.get('QUL'))
-                        if qtd <= 0: continue
-                        
-                        sig = ('rlp', sstr(cell.get('DAT')), sstr(cell.get('ACP')),
-                               pre, qtd, sstr(cell.get('AVD')),
-                               sstr(cell.get('AGR')),
-                               sstr(cell.get('AGAG')))
-                        
-                        if self._baseline_pending[sym]:
-                            self._vistos_tt[sym][sig] = True
-                            continue
-                        if sig in self._vistos_tt[sym]:
-                            continue
-                        
-                        vistos = self._vistos_tt[sym]
-                        vistos[sig] = True
-                        self._tt_recebidos[sym] += 1
-                        if len(vistos) > self._dedup_max_per_ativo:
-                            vistos.popitem(last=False)
-                        
-                        # v14.4: registrar chave DAT-primária SÓ NA EMISSÃO
-                        self._vistos_por_linha[sym][chave_linha] = True
-                        if len(self._vistos_por_linha[sym]) > self._dedup_max_per_ativo:
-                            self._vistos_por_linha[sym].popitem(last=False)
-                        
-                        dat_str = sstr(cell.get('DAT'))
-                        event_ts_ms = dat_to_epoch_ms(dat_str)
-                        receive_ns = now_ns()
-                        if event_ts_ms <= 0:
-                            event_ts_ms = receive_ns // 1_000_000
-                        
-                        valido, motivo = validate_event_ts(event_ts_ms, receive_ns)
-                        if not valido: continue
-                        
-                        ord_result = self._ordering_detector.check(sym, event_ts_ms, receive_ns)
-                        if ord_result.action == "REJECT": continue
-                        
-                        seq_id = next_sequence_id()
-                        trade = TradeEvent(
-                            symbol=sym, timestamp_ms=event_ts_ms, price=pre,
-                            quantity=qtd,
-                            aggressor="Comprador" if "compr" in sstr(cell.get('AGR')).lower() else "Vendedor",
-                            buyer=sstr(cell.get('ACP')), seller=sstr(cell.get('AVD')),
-                            received_at_ns=receive_ns,
-                            sequence_id=seq_id,
-                        )
-                        # v14: RLP com janela_id
-                        janela_idx = next((k for k, v in self._rlp_map.items() if v == sym), 0)
-                        yield MarketEvent(type='RLP', payload=trade, timestamp_ms=event_ts_ms,
-                                          symbol=sym, janela_id=janela_idx,
-                                          window_name=f'T&T{janela_idx}', is_rlp=True)
+                    lote_ref = lotes_linha.get('DAT', 0)
+                    if (lote_ref == 0
+                            or lotes_linha.get('PRE', 0) != lote_ref
+                            or lotes_linha.get('QUL', 0) != lote_ref):
+                        continue
+                    
+                    dat_str = sstr(cell.get('DAT'))
+                    chave_linha = ('rlp', sym, linha, dat_str)
+                    if chave_linha in self._vistos_por_linha[sym]:
+                        continue  # Re-entrega — chave registrada só na emissão
+                    
+                    pre = fnum(cell.get('PRE'))
+                    if pre <= 0: continue
+                    qtd = fint(cell.get('QUL'))
+                    if qtd <= 0: continue
+                    
+                    sig = ('rlp', sstr(cell.get('DAT')), sstr(cell.get('ACP')),
+                           pre, qtd, sstr(cell.get('AVD')),
+                           sstr(cell.get('AGR')),
+                           sstr(cell.get('AGAG')))
+                    
+                    if self._baseline_pending[sym]:
+                        self._vistos_tt[sym][sig] = True
+                        continue
+                    if sig in self._vistos_tt[sym]:
+                        continue
+                    
+                    vistos = self._vistos_tt[sym]
+                    vistos[sig] = True
+                    self._tt_recebidos[sym] += 1
+                    if len(vistos) > self._dedup_max_per_ativo:
+                        vistos.popitem(last=False)
+                    
+                    # v14.4: registrar chave DAT-primária SÓ NA EMISSÃO
+                    self._vistos_por_linha[sym][chave_linha] = True
+                    if len(self._vistos_por_linha[sym]) > self._dedup_max_per_ativo:
+                        self._vistos_por_linha[sym].popitem(last=False)
+                    
+                    dat_str = sstr(cell.get('DAT'))
+                    event_ts_ms = dat_to_epoch_ms(dat_str)
+                    receive_ns = now_ns()
+                    if event_ts_ms <= 0:
+                        event_ts_ms = receive_ns // 1_000_000
+                    
+                    valido, motivo = validate_event_ts(event_ts_ms, receive_ns)
+                    if not valido: continue
+                    
+                    ord_result = self._ordering_detector.check(sym, event_ts_ms, receive_ns)
+                    if ord_result.action == "REJECT": continue
+                    
+                    seq_id = next_sequence_id()
+                    trade = TradeEvent(
+                        symbol=sym, timestamp_ms=event_ts_ms, price=pre,
+                        quantity=qtd,
+                        aggressor="Comprador" if "compr" in sstr(cell.get('AGR')).lower() else "Vendedor",
+                        buyer=sstr(cell.get('ACP')), seller=sstr(cell.get('AVD')),
+                        received_at_ns=receive_ns,
+                        sequence_id=seq_id,
+                    )
+                    # v14: RLP com janela_id
+                    janela_idx = next((k for k, v in self._rlp_map.items() if v == sym), 0)
+                    yield MarketEvent(type='RLP', payload=trade, timestamp_ms=event_ts_ms,
+                                      symbol=sym, janela_id=janela_idx,
+                                      window_name=f'T&T{janela_idx}', is_rlp=True)
 
                 elif kind == "book":
                     self._book_cells[sym][linha][field] = val
@@ -454,6 +461,7 @@ class ProfitRTDAdapter(MarketDataSource):
             "ativos": list(set(self._tt_map.values())),
             "interface": "COM/RTD",
             "dedup_stats": self._dedup_stats(),
+            "tt_diagnostics": {sym: dict(counts) for sym, counts in self._tt_diag.items()},
             "ordering_stats": self._ordering_detector.get_stats_for_dashboard(),
         }
 
@@ -481,6 +489,8 @@ class ProfitRTDAdapter(MarketDataSource):
         self._vistos_tt = defaultdict(OrderedDict)
         self._vistos_por_linha = defaultdict(OrderedDict)
         self._baseline_pending = defaultdict(lambda: True)
+        # Diagnóstico: contadores por estágio de processamento TT (v14.5)
+        self._tt_diag = defaultdict(lambda: defaultdict(int))
 
 # Re-exporta constantes dos novos módulos
 from adapters.rtd_connection import (
