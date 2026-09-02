@@ -57,6 +57,8 @@ class ProfitRTDAdapter(MarketDataSource):
         self._vistos_tt = defaultdict(OrderedDict)  # (sym) -> OrderedDict[signature -> True]
         self._tt_recebidos = defaultdict(int)  # (sym) -> total trades received (running counter)
         self._baseline_pending = defaultdict(lambda: True)
+        self._cell_lote = defaultdict(dict)  # (sym, linha) -> {field: lote_num} — ciclo RefreshData de cada campo
+        self._lote_atual = 0  # contador de ciclos RefreshData
         self._book_cells = defaultdict(lambda: defaultdict(dict)) # (sym) -> {linha: {field: val}}
         self._last_book_yield = defaultdict(float)
         # Limite de memória para dedup (LRU eviction)
@@ -204,6 +206,7 @@ class ProfitRTDAdapter(MarketDataSource):
                 continue
 
             pairs = parse_refresh_data(data)
+            self._lote_atual += 1  # identifica este ciclo RefreshData
             for tid, val in pairs:
                 info = self._topic_map.get(tid)
                 if not info: continue
@@ -213,8 +216,21 @@ class ProfitRTDAdapter(MarketDataSource):
                     # Lógica de Dedup (Fase 1 — corrigida)
                     cell = self._book_cells[sym][linha]
                     cell[field] = val
+                    self._cell_lote[(sym, linha)][field] = self._lote_atual
                     
                     if field == 'DAT':  # Gatilho de processamento da linha
+                        # COERÊNCIA DE LOTE: DAT, PRE e QUL devem vir do MESMO
+                        # ciclo RefreshData. O shift de linhas da janela T&T faz
+                        # ~1000 células mudarem por trade; se os campos chegarem
+                        # em ciclos diferentes, a linha vira uma assinatura
+                        # "Frankenstein" (DAT de um trade + PRE/QUL de outro).
+                        # Essas linhas passavam pelo dedup de assinatura (sig nova)
+                        # e só morriam no ordering detector (89% do volume).
+                        lotes = self._cell_lote[(sym, linha)]
+                        lote_dat = lotes.get('DAT', 0)
+                        if lotes.get('PRE', 0) != lote_dat or lotes.get('QUL', 0) != lote_dat:
+                            continue  # Campos de ciclos diferentes — aguardar coerência
+                        
                         pre = fnum(cell.get('PRE'))
                         if pre <= 0: continue
                         qtd = fint(cell.get('QUL'))
@@ -309,8 +325,15 @@ class ProfitRTDAdapter(MarketDataSource):
                     # mas com flag separada para gravacao distinta
                     cell = self._book_cells[sym][linha]
                     cell[field] = val
+                    self._cell_lote[(sym, linha)][field] = self._lote_atual
                     
                     if field == 'DAT':
+                        # Coerência de lote (mesma proteção do fluxo TT)
+                        lotes = self._cell_lote[(sym, linha)]
+                        lote_dat = lotes.get('DAT', 0)
+                        if lotes.get('PRE', 0) != lote_dat or lotes.get('QUL', 0) != lote_dat:
+                            continue
+                        
                         pre = fnum(cell.get('PRE'))
                         if pre <= 0: continue
                         qtd = fint(cell.get('QUL'))

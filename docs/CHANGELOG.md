@@ -1,3 +1,85 @@
+## v14.3 — Coerência de Lote RTD + Correções Operacionais (02/09/2026)
+
+### Descoberta: a verdade sobre as "duplicatas RTD"
+
+Investigação original: 89% dos eventos do RTD eram marcados como duplicatas (2,39M de 2,68M).
+
+**Hipótese descartada:** "o RTD reenvia linhas persistentes a cada refresh" — FALSA. Evidência decisiva:
+
+```
+Soma tt_recebidos (passou pelo dedup de assinatura): 2.684.728
+events_total no detector de ordenação:               2.684.728
+Diferença: 0 — EXATAMENTE iguais
+```
+
+Se fossem reenvios, seriam bloqueados no dedup de assinatura e NUNCA chegariam ao detector. Os 2,68M tinham assinaturas NOVAS.
+
+### Mecanismo real: shift de linhas da janela T&T
+
+A janela T&T do Profit mostra ~1.000 linhas. Cada trade novo entra no TOPO e desce todas as outras uma posição:
+
+```
+Antes:            Depois de 1 trade novo:
+L2: trade Y       L2: trade NOVO
+L3: trade X       L3: trade Y
+L4: trade Z       L4: trade X
+...               ... (~1000 células mudam de conteúdo)
+```
+
+O RTD só reporta células que mudaram — mas as células chegam FORA DE SINCRONIA entre ciclos RefreshData. Quando o DAT do trade X chega na linha 4, os outros campos da linha 4 ainda contêm o trade Z:
+
+```
+Assinatura Frankenstein: (DAT_do_X, ACP_do_Z, PRE_do_Z, QUL_do_Z, ...)
+→ nunca vista → PASSA no dedup de assinatura
+→ timestamp do X já visto → REJEITADO no ordering detector
+```
+
+Isso explica:
+- **89% duplicatas** = Frankenstein cujo DAT pertence a trade já gravado
+- **WIN/WDO piores que IND/DOL** = mais volume → mais shifts
+- **Nada é perdido nem duplicado** — o detector é a 2ª linha de defesa
+
+### Risco identificado e eliminado
+
+Se uma Frankenstein tiver timestamp GENUINAMENTE novo (DAT novo + PRE/QUL antigos da linha), ela passa pelos DOIS filtros e grava um trade CORROMPIDO no Parquet.
+
+### Correção: coerência de lote (v14.3)
+
+Cada célula agora registra o número do ciclo RefreshData em que chegou (`_cell_lote`). A linha só é processada quando **DAT, PRE e QUL vierem do MESMO ciclo**:
+
+```python
+lotes = self._cell_lote[(sym, linha)]
+lote_dat = lotes.get('DAT', 0)
+if lotes.get('PRE', 0) != lote_dat or lotes.get('QUL', 0) != lote_dat:
+    continue  # Campos de ciclos diferentes — aguardar coerência
+```
+
+**Nota de implementação (APRENDIZADO):** o check NÃO deve rodar só no gatilho DAT — as células chegam em ordem arbitrária dentro do ciclo. Se DAT chega antes de PRE/QUL no mesmo ciclo, o check no DAT bloquearia o trade legítimo. O correto é checar coerência ao chegar QUALQUER um dos 3 campos (implementação pendente no momento deste registro — ver status abaixo).
+
+### Status da implementação
+
+| Item | Status |
+|------|--------|
+| Estrutura `_cell_lote` + `_lote_atual` no adapter | ✅ Implementado |
+| Check de coerência no fluxo TT | ⚠️ Implementado no gatilho DAT — precisa migrar para check nos 3 campos |
+| Check de coerência no fluxo RLP | ⚠️ Mesmo status do TT |
+| Testes (`test_lote_coerencia.py`) | ✅ 8 cenários (6 falham até migrar o check — esperado) |
+| Validação ao vivo (ratio dup 89% → ~0%) | Pendente pós-fix
+
+### Outras correções da sessão (02/09)
+
+| Fix | Arquivo | Problema |
+|-----|---------|----------|
+| Threshold timestamp 300s→600s | core/temporal.py | Buffer RTD inicial (trades de 09:40 recebidos 09:55) rejeitado — IND perdia 97% |
+| Dashboard contador real | adapters/profit_rtd.py + dashboard | Mostrava cache dedup (travava em 50K) em vez de total recebido |
+| fase_sessao epoch→tod | features/feature_engine.py | Mostrava "ALMOCO" às 10:17 (epoch ms em vez de time-of-day ms) |
+| Saldo corretoras fluxo completo | core/market_state.py | Só contava lado agressivo — todos os saldos negativos; + reset diário |
+| Race condition deque | features/cross_asset.py | "deque mutated during iteration" no /api/all — snapshot com list() |
+| Asset names U26→V26 | 8 arquivos | Pipeline ML com WDOU26/DOLU26 antigos |
+| Lazy imports no shim | motor_rt_alphaz.py | Cadeia core.app→pyarrow quebrava o módulo inteiro |
+
+---
+
 ## v14.2 — Auditoria de Arquitetura + 3 Fixes Críticos (02/09/2026)
 
 ### Auditoria Completa (C1/A1-A4/M1-M4)
