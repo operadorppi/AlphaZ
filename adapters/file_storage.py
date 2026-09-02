@@ -117,7 +117,7 @@ class CapturaEventosMS:
         self.rejeitados = {'ts_futuro': 0, 'ts_antigo': 0, 'qtd': 0,
                            'preco': 0, 'dup': 0, 'overflow': 0}
         self._ultimo_flush = time.time()
-        self.flush_max_idade_s = 5.0
+        self.flush_max_idade_s = 300.0  # v14.6: flush a cada 5 min (era 5s)
 
         # Metadados
         self._meta = {

@@ -39,7 +39,7 @@ log = logging.getLogger(__name__)
 # Tamanho máximo da fila interna (eventos que aguardam gravação)
 _MAX_QUEUE = 100_000
 # Intervalo de flush para disco (segundos)
-_FLUSH_INTERVAL_S = 0.5
+_FLUSH_INTERVAL_S = 300  # v14.6: flush a cada 5 min (era 0.5s)
 # Intervalo de log de saúde (segundos)
 _HEALTH_LOG_INTERVAL_S = 300  # 5 min
 
