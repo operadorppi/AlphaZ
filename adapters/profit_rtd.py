@@ -54,7 +54,6 @@ class ProfitRTDAdapter(MarketDataSource):
             forward_jump_threshold_ms=60_000,
             backward_sequence_threshold=3,
         )
-        self._vistos_tt = defaultdict(OrderedDict)  # (sym) -> OrderedDict[signature -> True]
         self._vistos_por_linha = defaultdict(OrderedDict)  # (sym) -> OrderedDict[(linha, DAT) -> True] (v14.4)
         self._tt_recebidos = defaultdict(int)  # (sym) -> total trades received (running counter)
         self._baseline_pending = defaultdict(lambda: True)
@@ -248,35 +247,13 @@ class ProfitRTDAdapter(MarketDataSource):
                     if qtd <= 0:
                         continue
                     
-                    # Assinatura determinística do negócio (2ª linha de defesa).
-                    # Campos: DAT + ACP + PRE + QUL + AVD + AGR + AGAG
-                    sig = (
-                        sstr(cell.get('DAT')),
-                        sstr(cell.get('ACP')),
-                        pre,
-                        qtd,
-                        sstr(cell.get('AVD')),
-                        sstr(cell.get('AGR')),
-                        sstr(cell.get('AGAG')),
-                    )
-                    
                     # Primeiro refresh absorve como baseline (evita emitir
                     # histórico acumulado na primeira chamada de RefreshData)
                     if self._baseline_pending[sym]:
-                        self._vistos_tt[sym][sig] = True
+                        self._vistos_por_linha[sym][chave_linha] = True
                         continue
 
-                    # DEDUP por assinatura (2ª linha de defesa — pega trades
-                    # que aparecem em linhas diferentes entre ciclos)
-                    if sig in self._vistos_tt[sym]:
-                        continue  # Duplicata — descartar silenciosamente
-                    
-                    # Marcar como visto (LRU eviction se exceder limite)
-                    vistos = self._vistos_tt[sym]
-                    vistos[sig] = True
                     self._tt_recebidos[sym] += 1
-                    if len(vistos) > self._dedup_max_per_ativo:
-                        vistos.popitem(last=False)
                     
                     # v14.4: registrar chave DAT-primária SÓ NA EMISSÃO
                     self._vistos_por_linha[sym][chave_linha] = True
@@ -358,22 +335,11 @@ class ProfitRTDAdapter(MarketDataSource):
                     qtd = fint(cell.get('QUL'))
                     if qtd <= 0: continue
                     
-                    sig = ('rlp', sstr(cell.get('DAT')), sstr(cell.get('ACP')),
-                           pre, qtd, sstr(cell.get('AVD')),
-                           sstr(cell.get('AGR')),
-                           sstr(cell.get('AGAG')))
-                    
                     if self._baseline_pending[sym]:
-                        self._vistos_tt[sym][sig] = True
-                        continue
-                    if sig in self._vistos_tt[sym]:
+                        self._vistos_por_linha[sym][chave_linha] = True
                         continue
                     
-                    vistos = self._vistos_tt[sym]
-                    vistos[sig] = True
                     self._tt_recebidos[sym] += 1
-                    if len(vistos) > self._dedup_max_per_ativo:
-                        vistos.popitem(last=False)
                     
                     # v14.4: registrar chave DAT-primária SÓ NA EMISSÃO
                     self._vistos_por_linha[sym][chave_linha] = True
@@ -463,9 +429,8 @@ class ProfitRTDAdapter(MarketDataSource):
         todos_ativos = set(self._tt_map.values()) | set(self._rlp_map.values()) | set(self._book_map.values())
         resultado = {}
         for sym in sorted(todos_ativos):
-            vistos = self._vistos_tt.get(sym, {})
             resultado[sym] = {
-                'asssinaturas_vistas': len(vistos),
+                'linhas_vistas': len(self._vistos_por_linha.get(sym, {})),
                 'tt_recebidos': self._tt_recebidos.get(sym, 0),
                 'baseline_pendente': self._baseline_pending.get(sym, False),
             }
@@ -473,7 +438,6 @@ class ProfitRTDAdapter(MarketDataSource):
 
     def _reset_dedup(self):
         """Reseta estado de deduplicação (para testes)."""
-        self._vistos_tt = defaultdict(OrderedDict)
         self._vistos_por_linha = defaultdict(OrderedDict)
         self._baseline_pending = defaultdict(lambda: True)
 
