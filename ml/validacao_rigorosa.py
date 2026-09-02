@@ -21,9 +21,8 @@ from collections import defaultdict
 
 DATASET = r'D:\MarketData\mimo\dataset_final_v2_win.parquet'
 ATIVO = 'WINV26'
-from config import CONFIG as _CFG
-TP_PTS = _CFG["trading"].get("tp_pts", 100)
-SL_PTS = _CFG["trading"].get("sl_pts", 50)
+TP_PTS = 100  # Valor default (não mais configurable via config.json)
+SL_PTS = 50
 OUTPUT_DIR = Path('validacao_resultados')
 OUTPUT_DIR.mkdir(exist_ok=True)
 
@@ -145,12 +144,17 @@ def auditar_leakage():
 
     for col in X_cols:
         # Check 1: correlação com label futuro
+        # NOTA: shift(-1) aqui é INTENCIONAL e NÃO é leakage.
+        # É um teste estatístico diagnóstico: verifica se a feature no
+        # tempo t correlaciona com o label no tempo t+1. O modelo NUNCA
+        # vê o label futuro — este shift é apenas para identificar
+        # features suspeitas que podem ter vazamento indireto.
+        # O shift(-1) é descartado após o cálculo da correlação.
         if 'label' in df.columns:
-            # Shift label para verificar se feature prediz label futuro
-            df['_label_futuro'] = df['label'].shift(-1)
-            corr = df[col].corr(df['_label_futuro'])
+            label_futuro = df['label'].shift(-1)  # diagnóstico, não feature
+            corr = df[col].corr(label_futuro)
             if abs(corr) > 0.1:
-                leakage_suspeito.append((col, corr, 'alta correlação com label futuro'))
+                leakage_suspeito.append((col, corr, 'alta correlação com label futuro (diagnóstico)'))
 
     # Check 2: features que são derivadas de outras
     derivadas = {
