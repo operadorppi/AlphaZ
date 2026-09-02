@@ -55,6 +55,7 @@ class ProfitRTDAdapter(MarketDataSource):
             backward_sequence_threshold=3,
         )
         self._vistos_tt = defaultdict(OrderedDict)  # (sym) -> OrderedDict[signature -> True]
+        self._vistos_por_linha = defaultdict(OrderedDict)  # (sym) -> OrderedDict[(linha, DAT) -> True] (v14.4)
         self._tt_recebidos = defaultdict(int)  # (sym) -> total trades received (running counter)
         self._baseline_pending = defaultdict(lambda: True)
         self._cell_lote = defaultdict(dict)  # (sym, linha) -> {field: lote_num} — ciclo RefreshData de cada campo
@@ -213,24 +214,38 @@ class ProfitRTDAdapter(MarketDataSource):
                 kind, sym, field, linha = info
 
                 if kind == "tt":
-                    # Lógica de Dedup (Fase 1 — corrigida) + coerência de lote (v14.3)
+                    # Lógica de Dedup (Fase 1) + coerência de lote + DAT-primário (v14.4)
                     cell = self._book_cells[sym][linha]
                     cell[field] = val
                     lotes_linha = self._cell_lote[(sym, linha)]
                     lotes_linha[field] = self._lote_atual
                     
-                    # COERÊNCIA DE LOTE (v14.3): DAT, PRE e QUL devem vir do MESMO
-                    # ciclo RefreshData. O shift de linhas da janela T&T faz ~1000
-                    # células mudarem por trade; campos de ciclos diferentes criam
-                    # assinaturas "Frankenstein" que passavam no dedup e morriam
-                    # no ordering detector (89% do volume).
-                    # Check nos 3 campos: células chegam em ordem arbitrária dentro
-                    # do ciclo, então qualquer chegada pode completar a tríade.
-                    if field in ('DAT', 'PRE', 'QUL'):
+                    # ============================================================
+                    # DEDUP PRIMÁRIO POR DAT (v14.4)
+                    # ============================================================
+                    # A janela T&T mostra ~1000 linhas; cada trade novo faz TODAS
+                    # as linhas descEREM uma posição e o RTD re-entrega TODAS elas
+                    # no MESMO ciclo (mudaram juntas → passam na coerência de lote).
+                    # O conteúdo da linha move como uma UNIDADE: se o DAT da linha
+                    # não mudou desde a última emissão desta linha, é re-entrega
+                    # do mesmo trade → descartar ANTES de montar assinatura.
+                    # Isso elimina ~90% do volume que só morria no ordering detector.
+                    # ============================================================
+                    if field == 'DAT':
+                        # Coerência de lote (mantida): PRE/QUL do mesmo ciclo
                         lote_dat = lotes_linha.get('DAT', 0)
                         if (lotes_linha.get('PRE', 0) != lote_dat
                                 or lotes_linha.get('QUL', 0) != lote_dat):
-                            continue  # Aguardar coerência — trade legítimo é re-entregue pelo RTD
+                            continue  # Campos de ciclos diferentes — aguardar convergência
+                        
+                        dat_str = sstr(val)
+                        # DAT-primário: se esta linha JÁ EMITIU este DAT, qualquer
+                        # re-entrega é o mesmo trade (a linha move como unidade).
+                        # A chave é registrada SÓ NA EMISSÃO (mais abaixo), não na
+                        # primeira chegada — senão bloquearia a própria emissão.
+                        chave_linha = (sym, linha, dat_str)
+                        if chave_linha in self._vistos_por_linha[sym]:
+                            continue  # Re-entrega do mesmo trade nesta linha — descartar
                     
                     if field == 'DAT':  # Gatilho de processamento da linha
                         pre = fnum(cell.get('PRE'))
@@ -238,12 +253,8 @@ class ProfitRTDAdapter(MarketDataSource):
                         qtd = fint(cell.get('QUL'))
                         if qtd <= 0: continue  # RTD envia qtd=0 para ativos sem dados reais
                         
-                        # Assinatura determinística do negócio.
+                        # Assinatura determinística do negócio (2ª linha de defesa).
                         # Campos: DAT + ACP + PRE + QUL + AVD + AGR + AGAG
-                        # O AGAG (agressor agregado) é incluido para distinguir
-                        # trades que podem ter a mesma combinação básica mas
-                        # que o Profit classifica diferentemente (ex: direto
-                        # vs carteira).
                         sig = (
                             sstr(cell.get('DAT')),
                             sstr(cell.get('ACP')),
@@ -260,9 +271,8 @@ class ProfitRTDAdapter(MarketDataSource):
                             self._vistos_tt[sym][sig] = True
                             continue
 
-                        # DEDUP: se a assinatura já foi vista, NÃO emitir.
-                        # O RTD mantém linhas T&T persistentes e pode reenviar
-                        # o mesmo trade em refreshes subsequentes.
+                        # DEDUP por assinatura (2ª linha de defesa — pega trades
+                        # que aparecem em linhas diferentes entre ciclos)
                         if sig in self._vistos_tt[sym]:
                             continue  # Duplicata — descartar silenciosamente
                         
@@ -273,6 +283,11 @@ class ProfitRTDAdapter(MarketDataSource):
                         if len(vistos) > self._dedup_max_per_ativo:
                             # Remove o item mais antigo (primeiro inserido)
                             vistos.popitem(last=False)
+                        
+                        # v14.4: registrar chave DAT-primária SÓ NA EMISSÃO
+                        self._vistos_por_linha[sym][chave_linha] = True
+                        if len(self._vistos_por_linha[sym]) > self._dedup_max_per_ativo:
+                            self._vistos_por_linha[sym].popitem(last=False)
                         
                         # Fase 2: Preservar timestamp do mercado (DAT do Profit)
                         # NUNCA usar wall clock como timestamp do evento.
@@ -330,12 +345,17 @@ class ProfitRTDAdapter(MarketDataSource):
                     lotes_linha = self._cell_lote[(sym, linha)]
                     lotes_linha[field] = self._lote_atual
                     
-                    # Coerência de lote (mesma proteção do fluxo TT, check nos 3 campos)
-                    if field in ('DAT', 'PRE', 'QUL'):
+                    # Dedup DAT-primário (v14.4, mesma proteção do fluxo TT)
+                    if field == 'DAT':
                         lote_dat = lotes_linha.get('DAT', 0)
                         if (lotes_linha.get('PRE', 0) != lote_dat
                                 or lotes_linha.get('QUL', 0) != lote_dat):
                             continue
+                        
+                        dat_str = sstr(val)
+                        chave_linha = ('rlp', sym, linha, dat_str)
+                        if chave_linha in self._vistos_por_linha[sym]:
+                            continue  # Re-entrega — chave registrada só na emissão
                     
                     if field == 'DAT':
                         pre = fnum(cell.get('PRE'))
@@ -359,6 +379,11 @@ class ProfitRTDAdapter(MarketDataSource):
                         self._tt_recebidos[sym] += 1
                         if len(vistos) > self._dedup_max_per_ativo:
                             vistos.popitem(last=False)
+                        
+                        # v14.4: registrar chave DAT-primária SÓ NA EMISSÃO
+                        self._vistos_por_linha[sym][chave_linha] = True
+                        if len(self._vistos_por_linha[sym]) > self._dedup_max_per_ativo:
+                            self._vistos_por_linha[sym].popitem(last=False)
                         
                         dat_str = sstr(cell.get('DAT'))
                         event_ts_ms = dat_to_epoch_ms(dat_str)
@@ -433,19 +458,28 @@ class ProfitRTDAdapter(MarketDataSource):
         }
 
     def _dedup_stats(self):
-        """Retorna estatísticas de deduplicação por ativo."""
-        return {
-            sym: {
+        """Retorna estatísticas de deduplicação por ativo.
+
+        v14.4: inclui TODOS os ativos conectados (tt_map + rlp_map + book_map),
+        não só os que já tiveram trades — ativos de baixo volume (IND, DOL)
+        ou em pausa de pregão aparecem com zero em vez de sumirem do dashboard.
+        """
+        # União de todos os ativos conhecidos
+        todos_ativos = set(self._tt_map.values()) | set(self._rlp_map.values()) | set(self._book_map.values())
+        resultado = {}
+        for sym in sorted(todos_ativos):
+            vistos = self._vistos_tt.get(sym, {})
+            resultado[sym] = {
                 'asssinaturas_vistas': len(vistos),
                 'tt_recebidos': self._tt_recebidos.get(sym, 0),
                 'baseline_pendente': self._baseline_pending.get(sym, False),
             }
-            for sym, vistos in self._vistos_tt.items()
-        }
+        return resultado
 
     def _reset_dedup(self):
         """Reseta estado de deduplicação (para testes)."""
         self._vistos_tt = defaultdict(OrderedDict)
+        self._vistos_por_linha = defaultdict(OrderedDict)
         self._baseline_pending = defaultdict(lambda: True)
 
 # Re-exporta constantes dos novos módulos
