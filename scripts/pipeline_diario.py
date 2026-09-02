@@ -168,9 +168,9 @@ def main():
     # vwap_<YYYYMM>.parquet, que alimentam o scorer ao vivo e o dashboard.
     if not args.skip_batch:
         mes_str = f'{hoje.year}{hoje.month:02d}'
-    run('ml/integrar_base.py',
-            ['--mes', mes_str, '--ativo'] + ATIVOS,
-            log_file, 4.5, 'Integrar contexto avançado (v9.32)', dry_run=args.dry_run)
+        run('ml/integrar_base.py',
+                ['--mes', mes_str, '--ativo'] + ATIVOS,
+                log_file, 4.5, 'Integrar contexto avançado (v9.32)', dry_run=args.dry_run)
     else:
         print(f'\n[4.5/7] Integrar contexto — pulado (--skip-batch)')
 
@@ -179,14 +179,29 @@ def main():
     from relatorio_diario import ultimos_dias_uteis
     from glob import glob
     # Só validar dias que REALMENTE têm dados brutos
-    arquivos_neg = glob(str(Path(save_dir) / 'raw_negocios_ms_*.jsonl'))
+    # v14: buscar diretórios Hive (RAW/data_type=TT/date=YYYYMMDD/)
+    #       fallback: JSONL legado (raw_negocios_ms_*.jsonl)
     dias_com_dados = set()
-    for af in arquivos_neg:
-        nome = Path(af).stem
-        for parte in nome.split('_'):
-            if len(parte) == 8 and parte.isdigit():
-                dias_com_dados.add(parte)
-                break
+    raw_root = Path(save_dir) / 'RAW'
+    tt_root = raw_root / 'data_type=TT'
+    if tt_root.exists():
+        for date_dir in tt_root.iterdir():
+            if date_dir.is_dir() and date_dir.name.startswith('date='):
+                dia_str = date_dir.name.replace('date=', '')
+                if len(dia_str) == 8 and dia_str.isdigit():
+                    # Verificar se tem pelo menos 1 arquivo Parquet dentro
+                    tem_dados = any(date_dir.rglob('*.parquet'))
+                    if tem_dados:
+                        dias_com_dados.add(dia_str)
+    if not dias_com_dados:
+        # Fallback: JSONL legado
+        arquivos_neg = glob(str(Path(save_dir) / 'raw_negocios_ms_*.jsonl'))
+        for af in arquivos_neg:
+            nome = Path(af).stem
+            for parte in nome.split('_'):
+                if len(parte) == 8 and parte.isdigit():
+                    dias_com_dados.add(parte)
+                    break
     # Dias do gate = interseção entre dias úteis do mês e dias com dados
     inicio_mes = date(hoje.year, hoje.month, 1)
     todos_uteis = [d for i in range((hoje - inicio_mes).days + 1)
