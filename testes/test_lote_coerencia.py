@@ -27,23 +27,27 @@ class FakeAdapter:
 
     v14.7: RTD nunca envia linha duplicada → sem dedup por linha.
     Apenas coerência de lote (Frankenstein) + baseline (1º ciclo).
+    v14.8: estado das células separado POR JANELA — TT, RLP e BOOK
+    do mesmo ativo não compartilham células (contaminação cruzada).
     """
 
     def __init__(self, max_per_ativo=50000):
         self._baseline_pending = defaultdict(lambda: True)
-        self._cell_lote = defaultdict(dict)
+        self._cell_lote = defaultdict(dict)  # (sym, kind, janela, linha) -> {field: lote}
         self._lote_atual = 0
         self.eventos = []
 
-    def processar_campo(self, sym, linha, field, val):
+    def processar_campo(self, sym, linha, field, val, kind='tt', janela=2):
         """Simula a chegada de 1 campo num ciclo RefreshData.
 
         Retorna True se um trade foi emitido (campos coerentes).
-        Replica o adapter v14.7: coerência de lote em qualquer
-        campo-chave (DAT/PRE/QUL), sem dedup por linha.
+        Replica o adapter v14.7/v14.8: coerência de lote em qualquer
+        campo-chave (DAT/PRE/QUL), sem dedup por linha, estado
+        separado por (kind, janela).
         """
-        cell = self._cell_lote.setdefault((sym, linha), {}).setdefault('_cell', {})
-        lotes = self._cell_lote[(sym, linha)]
+        chave = (sym, kind, janela, linha)
+        cell = self._cell_lote.setdefault(chave, {}).setdefault('_cell', {})
+        lotes = self._cell_lote[chave]
         cell[field] = val
         lotes[field] = self._lote_atual
 
@@ -68,7 +72,8 @@ class FakeAdapter:
         if self._baseline_pending[sym]:
             return False
 
-        self.eventos.append({'sym': sym, 'dat': sstr(cell.get('DAT')), 'pre': pre, 'qtd': qtd})
+        self.eventos.append({'sym': sym, 'kind': kind, 'janela': janela,
+                             'dat': sstr(cell.get('DAT')), 'pre': pre, 'qtd': qtd})
         return True
 
     def novo_ciclo(self):
@@ -237,6 +242,87 @@ class TestLoteCoerencia:
         assert len(a.eventos) == 10, f"Esperado 10 (5+5), got {len(a.eventos)}"
         # Todos os novos com o preço do shift
         assert all(e['pre'] >= 187700.0 for e in a.eventos[5:])
+
+
+class TestSeparacaoJanelas:
+    """v14.8: TT, RLP e BOOK do mesmo ativo têm estado isolado.
+
+    Bug corrigido: `_book_cells[sym]` era compartilhado entre janelas —
+    o RLP sobrescrevia o TT (e vice-versa) na mesma linha, gerando trades
+    Frankenstein ou perda de captura. Também ACP/AVD do BOOK colidiam
+    com ACP/AVD do TT.
+    """
+
+    def test_tt_e_rlp_mesmo_simbolo_nao_se_contaminam(self):
+        """WIN tem T&T2 (TT) e T&T4 (RLP). Trade na linha 0 de cada janela
+        com o MESMO DAT deve gerar 2 eventos independentes — não 1."""
+        a = FakeAdapter()
+        a.fechar_baseline()
+
+        a.novo_ciclo()
+        # TT (janela 2)
+        a.processar_campo('WINV26', 0, 'PRE', 187700.0, kind='tt', janela=2)
+        a.processar_campo('WINV26', 0, 'QUL', 5, kind='tt', janela=2)
+        e1 = a.processar_campo('WINV26', 0, 'DAT', '10:30:00.000', kind='tt', janela=2)
+        # RLP (janela 4)
+        a.processar_campo('WINV26', 0, 'PRE', 187700.0, kind='rlp', janela=4)
+        a.processar_campo('WINV26', 0, 'QUL', 5, kind='rlp', janela=4)
+        e2 = a.processar_campo('WINV26', 0, 'DAT', '10:30:00.000', kind='rlp', janela=4)
+
+        assert e1 is True
+        assert e2 is True
+        assert len(a.eventos) == 2, "TT e RLP deveriam emitir independentes"
+        assert a.eventos[0]['janela'] == 2
+        assert a.eventos[1]['janela'] == 4
+
+    def test_janelas_nao_criam_frankenstein_cruzado(self):
+        """TT na linha 0 com lote do ciclo 1 e RLP na linha 0 com lote do
+        ciclo 2: ANTES do fix, a coerência misturava os lotes e bloqueava
+        ou emitia Frankenstein. AGORA cada janela tem seu próprio lote."""
+        a = FakeAdapter()
+        a.fechar_baseline()
+
+        # Ciclo 1: TT completa seu trade na linha 0
+        a.novo_ciclo()
+        a.processar_campo('WINV26', 0, 'PRE', 187700.0, kind='tt', janela=2)
+        a.processar_campo('WINV26', 0, 'QUL', 5, kind='tt', janela=2)
+        a.processar_campo('WINV26', 0, 'DAT', '10:30:00.000', kind='tt', janela=2)
+        assert len(a.eventos) == 1
+
+        # Ciclo 2: RLP (janela diferente) escreve a MESMA linha com lote novo
+        a.novo_ciclo()
+        a.processar_campo('WINV26', 0, 'PRE', 187700.0, kind='rlp', janela=4)
+        a.processar_campo('WINV26', 0, 'QUL', 5, kind='rlp', janela=4)
+        e = a.processar_campo('WINV26', 0, 'DAT', '10:30:01.000', kind='rlp', janela=4)
+
+        assert e is True, "RLP deveria emitir independente do lote antigo do TT"
+        assert len(a.eventos) == 2
+        assert a.eventos[1]['kind'] == 'rlp'
+        assert a.eventos[1]['dat'] == '10:30:01.000'
+
+    def test_sem_mistura_quando_janelas_trocam_de_linha(self):
+        """Se o TT re-escreve a linha 0 no ciclo 3 e o RLP não atualizou,
+        o trade do TT sai com os campos do TT (não do RLP)."""
+        a = FakeAdapter()
+        a.fechar_baseline()
+
+        # Ciclo 1: RLP escreve linha 0
+        a.novo_ciclo()
+        a.processar_campo('WINV26', 0, 'PRE', 187600.0, kind='rlp', janela=4)
+        a.processar_campo('WINV26', 0, 'QUL', 1, kind='rlp', janela=4)
+        a.processar_campo('WINV26', 0, 'DAT', '10:29:00.000', kind='rlp', janela=4)
+        assert len(a.eventos) == 1
+
+        # Ciclo 2: TT (janela 2) escreve a mesma linha 0 com conteúdo próprio
+        a.novo_ciclo()
+        a.processar_campo('WINV26', 0, 'PRE', 187800.0, kind='tt', janela=2)
+        a.processar_campo('WINV26', 0, 'QUL', 3, kind='tt', janela=2)
+        a.processar_campo('WINV26', 0, 'DAT', '10:31:00.000', kind='tt', janela=2)
+
+        assert len(a.eventos) == 2
+        assert a.eventos[1]['kind'] == 'tt'
+        assert a.eventos[1]['pre'] == 187800.0, "Preço do TT, não do RLP"
+        assert a.eventos[1]['qtd'] == 3, "Quantidade do TT, não do RLP"
 
 
 if __name__ == '__main__':

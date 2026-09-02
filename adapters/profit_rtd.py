@@ -58,7 +58,7 @@ class ProfitRTDAdapter(MarketDataSource):
         self._baseline_pending = defaultdict(lambda: True)
         self._cell_lote = defaultdict(dict)  # (sym, linha) -> {field: lote_num} — ciclo RefreshData de cada campo
         self._lote_atual = 0  # contador de ciclos RefreshData
-        self._book_cells = defaultdict(lambda: defaultdict(dict)) # (sym) -> {linha: {field: val}}
+        self._book_cells = defaultdict(lambda: defaultdict(dict))  # (sym, kind, janela) -> {linha: {field: val}}
         self._last_book_yield = defaultdict(float)
         # Limite de memória para dedup (LRU eviction)
         self._dedup_max_per_ativo = 50000  # max 50K assinaturas por ativo
@@ -148,7 +148,7 @@ class ProfitRTDAdapter(MarketDataSource):
                 for field in BK_FIELDS:
                     try:
                         tid, _ = _connect(self._srv, [f"BOOK{j_idx}", field, str(linha)])
-                        self._topic_map[tid] = ("book", sym, field, linha)
+                        self._topic_map[tid] = ("book", sym, field, linha, j_idx)
                         ok += 1
                     except Exception:
                         fail += 1
@@ -162,7 +162,7 @@ class ProfitRTDAdapter(MarketDataSource):
                 for field in TT_FIELDS:
                     try:
                         tid, _ = _connect(self._srv, [f"T&T{j_idx}", field, str(linha)])
-                        self._topic_map[tid] = ("tt", sym, field, linha)
+                        self._topic_map[tid] = ("tt", sym, field, linha, j_idx)
                         ok += 1
                     except Exception:
                         fail += 1
@@ -177,7 +177,7 @@ class ProfitRTDAdapter(MarketDataSource):
                 for field in TT_FIELDS:
                     try:
                         tid, _ = _connect(self._srv, [f"T&T{j_idx}", field, str(linha)])
-                        self._topic_map[tid] = ("rlp", sym, field, linha)
+                        self._topic_map[tid] = ("rlp", sym, field, linha, j_idx)
                         ok += 1
                     except Exception:
                         fail += 1
@@ -209,16 +209,21 @@ class ProfitRTDAdapter(MarketDataSource):
             for tid, val in pairs:
                 info = self._topic_map.get(tid)
                 if not info: continue
-                kind, sym, field, linha = info
+                kind, sym, field, linha, j_idx = info
 
                 if kind == "tt":
                     # v14.5: Lógica de Dedup + coerência de lote + DAT-primário
                     # O gatilho de coerência dispara em QUALQUER um dos 3 campos
                     # chave (DAT/PRE/QUL), não só no DAT. Isso resolve o race
                     # condition onde DAT chega antes de PRE/QUL no mesmo ciclo.
-                    cell = self._book_cells[sym][linha]
+                    # v14.8: Estado das células separado POR JANELA — TT, RLP e
+                    # BOOK do mesmo ativo não podem compartilhar o mesmo dict
+                    # (contaminação cruzada: RLP sobrescrevia TT e vice-versa;
+                    # ACP/AVD do BOOK colidiam com ACP/AVD do TT).
+                    stream_key = (sym, 'tt', j_idx)
+                    cell = self._book_cells[stream_key][linha]
                     cell[field] = val
-                    lotes_linha = self._cell_lote[(sym, linha)]
+                    lotes_linha = self._cell_lote[(stream_key, linha)]
                     lotes_linha[field] = self._lote_atual
 
                     # Só processa quando algum dos 3 campos-chave chega
@@ -291,16 +296,17 @@ class ProfitRTDAdapter(MarketDataSource):
                         sequence_id=seq_id,
                     )
                     # v14: incluir janela_id no MarketEvent
-                    janela_idx = next((k for k, v in self._tt_map.items() if v == sym), 0)
                     yield MarketEvent(type='TRADE', payload=trade, timestamp_ms=event_ts_ms,
-                                      symbol=sym, janela_id=janela_idx,
-                                      window_name=f'T&T{janela_idx}')
+                                      symbol=sym, janela_id=j_idx,
+                                      window_name=f'T&T{j_idx}')
 
                 elif kind == "rlp":
                     # v14.5: RLP — coerência + gatilho em qualquer campo-chave
-                    cell = self._book_cells[sym][linha]
+                    # v14.8: Estado separado por janela (ver nota no bloco tt)
+                    stream_key = (sym, 'rlp', j_idx)
+                    cell = self._book_cells[stream_key][linha]
                     cell[field] = val
-                    lotes_linha = self._cell_lote[(sym, linha)]
+                    lotes_linha = self._cell_lote[(stream_key, linha)]
                     lotes_linha[field] = self._lote_atual
                     
                     if field not in ('DAT', 'PRE', 'QUL'):
@@ -346,13 +352,15 @@ class ProfitRTDAdapter(MarketDataSource):
                         sequence_id=seq_id,
                     )
                     # v14: RLP com janela_id
-                    janela_idx = next((k for k, v in self._rlp_map.items() if v == sym), 0)
                     yield MarketEvent(type='RLP', payload=trade, timestamp_ms=event_ts_ms,
-                                      symbol=sym, janela_id=janela_idx,
-                                      window_name=f'T&T{janela_idx}', is_rlp=True)
+                                      symbol=sym, janela_id=j_idx,
+                                      window_name=f'T&T{j_idx}', is_rlp=True)
 
                 elif kind == "book":
-                    self._book_cells[sym][linha][field] = val
+                    # v14.8: BOOK com estado próprio — não compartilha células
+                    # com TT/RLP (ACP/AVD do BOOK colidiam com o do TT).
+                    stream_key = (sym, 'book', j_idx)
+                    self._book_cells[stream_key][linha][field] = val
                     self._book_recv_count[sym] = self._book_recv_count.get(sym, 0) + 1
                     
                     # Throttle: emite snapshot do book a cada 100ms por ativo (alinhado com janela ML)
@@ -362,7 +370,7 @@ class ProfitRTDAdapter(MarketDataSource):
                         receive_ns = now_ns()
                         bids, asks = [], []
                         for l_idx in range(int((self.config.get('rtd') or {}).get('book_linhas', 500))):
-                            c = self._book_cells[sym][l_idx]
+                            c = self._book_cells[stream_key][l_idx]
                             if c.get('OCP'): bids.append(BookLevel(price=fnum(c['OCP']), volume=fint(c.get('VOC')), broker=sstr(c.get('ACP'))))
                             if c.get('OVD'): asks.append(BookLevel(price=fnum(c['OVD']), volume=fint(c.get('VOV')), broker=sstr(c.get('AVD'))))
                         

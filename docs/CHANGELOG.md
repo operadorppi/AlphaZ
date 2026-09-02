@@ -1,3 +1,64 @@
+## v14.8 — Separação de Estado por Janela (TT/RLP/BOOK) — Bug Crítico (02/09/2026)
+
+### Bug corrigido: contaminação cruzada entre janelas do mesmo ativo
+
+A auditoria do pente fino encontrou que `_book_cells` era um dicionário
+indexado apenas por símbolo: `(sym) -> {linha: {field: val}}`, compartilhado
+entre **todas as janelas** do mesmo ativo.
+
+Com WIN tendo T&T2 (TT) e T&T4 (RLP), as duas janelas gravavam e liam as
+**mesmas células** na mesma linha:
+
+```
+ANTES (v14.7):                          DEPOIS (v14.8):
+_book_cells[sym][linha]                 _book_cells[(sym, kind, janela)][linha]
+  T&T2 (TT)   → linha 5                T&T2 (TT)   → (WIN, 'tt', 2)   → linha 5
+  T&T4 (RLP)  → linha 5  ⚠️ MESMO      T&T4 (RLP)  → (WIN, 'rlp', 4)  → linha 5
+  BOOK2       → linha 5  ⚠️ MESMO      BOOK2       → (WIN, 'book', 2) → linha 5
+```
+
+### Impactos da contaminação
+
+1. **RLP sobrescrevia TT (e vice-versa)** — campos de uma janela eram
+   substituídos pelos da outra antes do processamento → trades perdidos
+   ou emitidos com conteúdo errado (Frankenstein entre janelas).
+2. **Colisão de campos ACP/AVD** — o BOOK também gravava no mesmo dict e
+   usa `ACP`/`AVD` (corretoras do nível), os MESMOS nomes de campo que o
+   TT usa (comprador/vendedor do trade) → um write do BOOK corrompia o
+   buyer/seller do trade e vice-versa.
+3. **`_cell_lote` compartilhado** — a coerência de lote (DAT/PRE/QUL do
+   mesmo ciclo) também era por `(sym, linha)`, então lotes de janelas
+   diferentes se misturavam, bloqueando ou liberando trades errados.
+
+### Correção aplicada
+
+- `_topic_map[tid]` agora carrega o índice da janela: `(kind, sym, field, linha, j_idx)`.
+- Estado das células por stream: `(sym, kind, janela_idx)` para `_book_cells`
+  e `(sym, kind, janela_idx, linha)` para `_cell_lote`.
+- O `janela_id` do MarketEvent agora usa o índice real da janela (`j_idx`)
+  em vez do `next()` que encontrava a primeira janela do ativo.
+- BOOK usa o próprio stream — não compartilha nada com TT/RLP.
+
+### Arquivos alterados
+
+| Arquivo | Mudança |
+|---------|---------|
+| `adapters/profit_rtd.py` | Topic map com j_idx; células e lotes por (sym, kind, janela) |
+| `testes/test_lote_coerencia.py` | FakeAdapter com janela; 3 novos testes de separação |
+
+### Testes
+
+- 3 novos testes de separação de janelas (TT+RLP independentes, lote
+  não-cruzado, conteúdo não-misturado) — todos passando.
+- `test_lote_coerencia.py`: 11/11 passando.
+- Suíte completa: 817 passed, 28 failed (baseline pré-existente, zero novos).
+
+### Necessário reiniciar o motor
+
+A correção entra em vigor no próximo restart do motor (estado das células
+é construído em memória).
+
+
 ## v14.3 — Coerência de Lote RTD + Correções Operacionais (02/09/2026)
 
 ### Descoberta: a verdade sobre as "duplicatas RTD"
