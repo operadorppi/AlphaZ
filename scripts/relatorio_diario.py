@@ -23,7 +23,6 @@ import os
 import sys
 from datetime import date, timedelta
 from pathlib import Path
-from adapters.file_storage import find_hive_files
 
 DEFAULT_SAVE_DIR = r'D:\MarketData\mimo'
 MIN_TRADES_POR_DIA = 500
@@ -54,6 +53,8 @@ def ultimos_dias_uteis(n=5, hoje=None):
 def _ler_negocios_hive(base, data_str):
     """Le negocios de Parquet Hive (RAW/data_type=TT/date=.../).
     Retorna (arquivos_neg, n_negocios, por_ativo, ts_min, ts_max, book_snapshots)."""
+    import sys
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
     from adapters.file_storage import find_hive_files
     tt_files = find_hive_files(str(base), dia_str=data_str, data_type='TT')
     book_files = find_hive_files(str(base), dia_str=data_str, data_type='BOOK')
@@ -112,7 +113,10 @@ def validar_dia(save_dir, data_str):
         tt_files, negocios, por_ativo, ts_min, ts_max, book_snaps = \
             _ler_negocios_hive(base, data_str)
         neg_arquivos = tt_files
-        book_arquivos = find_hive_files(str(base), dia_str=data_str, data_type='BOOK') if tt_files else []
+        import sys as _sys
+        _sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
+        from adapters.file_storage import find_hive_files as _fhf
+        book_arquivos = _fhf(str(base), dia_str=data_str, data_type='BOOK') if tt_files else []
         meta_arquivos = sorted(base.glob(f'raw_meta_*{data_str}*.json'))
     else:
         # Fallback: JSONL legado
