@@ -18,7 +18,6 @@ import argparse
 import json
 import numpy as np
 from pathlib import Path
-from config import CONFIG as _CFG
 
 # ════════════════════════════════════════════════════════════════
 # LABEL CANONICO
@@ -62,11 +61,11 @@ def label_vectorizado(precos, ts_ms, ativos,
         dict com arrays numpy
     """
     if tp_pts is None:
-        tp_pts = _CFG['trading'].get('tp_pts', 100.0)
+        tp_pts = 100.0
     if sl_pts is None:
-        sl_pts = _CFG['trading'].get('sl_pts', 50.0)
+        sl_pts = 50.0
     if max_holding_s is None:
-        max_holding_s = _CFG['trading'].get('max_holding_s') or 30
+        max_holding_s = 30
     n = len(precos)
     max_holding_ms = max_holding_s * 1000
     ahead_ticks = max_holding_ms // tick_ms
@@ -231,11 +230,11 @@ def processar_jsonl(input_path, output_path, ativo_filter=None,
     O retorno_pts precisa ser calculado dentro do mesmo ativo.
     """
     if tp_pts is None:
-        tp_pts = _CFG['trading'].get('tp_pts', 100)
+        tp_pts = 100.0
     if sl_pts is None:
-        sl_pts = _CFG['trading'].get('sl_pts', 50)
+        sl_pts = 50.0
     if max_holding_s is None:
-        max_holding_s = _CFG['trading'].get('max_holding_s') or 30
+        max_holding_s = 30
     print(f'Lendo {input_path}...')
 
     # v11.3: Carrega tudo, depois processa por ativo

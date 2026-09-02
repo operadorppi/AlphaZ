@@ -20,7 +20,6 @@ import os
 import sys
 from pathlib import Path
 from datetime import date, timedelta
-from config import CONFIG as _CFG
 
 try:
     from zoneinfo import ZoneInfo
@@ -175,8 +174,8 @@ def main():
     print(f'\n{"="*60}')
     print(f'OUT-OF-SAMPLE — {nome} | Ativo: {args.ativo}')
     print(f'{"="*60}')
-    tp_pts = _CFG["trading"].get("tp_pts", 100)
-    sl_pts = _CFG["trading"].get("sl_pts", 50)
+    tp_pts = 100
+    sl_pts = 50
     result = avaliar_modelo(modelo, X_test, y_test, tp_pts=tp_pts, sl_pts=sl_pts)
     print(f'Acuracia:  {result["acuracia"]:.4f}')
     if result.get('auc') is not None:
