@@ -173,14 +173,13 @@ class EventOrderingDetector:
                 self._stats['max_gap_ms'] = abs(gap_ms)
 
             # 3. Timestamp duplicado (mesmo event_ts_ms já visto)
+            # v14.6: NÃO rejeitar — burst trades legítimos da B3
+            # (mesmo ms, mesmo preço, mesma quantidade, corretoras iguais)
+            # Apenas registrar métrica. A dedup real já acontece no
+            # adapter (DAT-primary + coerência).
             if event_ts_ms in self._seen_ts[ativo]:
                 result.is_duplicate = True
                 self._stats['events_duplicate'] += 1
-                # Duplicatas são rejeitadas (já processadas)
-                result.action = "REJECT"
-                result.reason = "duplicate_timestamp"
-                # NÃO atualizar _last_ts (não é o mais recente)
-                return result
 
             # 4. Fora de ordem (timestamp < último do ativo)
             if event_ts_ms < last_ts:
