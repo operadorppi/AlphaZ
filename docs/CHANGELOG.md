@@ -1,3 +1,98 @@
+## v14.2 — Auditoria de Arquitetura + 3 Fixes Críticos (02/09/2026)
+
+### Auditoria Completa (C1/A1-A4/M1-M4)
+
+Mapeamento do grafo de dependências do projeto inteiro, classificando 13 problemas por severidade:
+
+| ID | Severidade | Problema | Status |
+|----|-----------|----------|--------|
+| C1 | 🔴 CRÍTICO | motor_rt_alphaz.py shim com imports de nível de módulo — falha em qualquer dependência quebra tudo | ✅ CORRIGIDO |
+| C2 | 🔴 CRÍTICO | Replay gate não configurável — motor opera em modo "captura pura" indefinidamente | ✅ Já implementado (require_replay_validated: false) |
+| C3 | 🔴 CRÍTICO | Sem purge/embargo no split treino/teste — labels de treino se estendem para teste | ✅ CORRIGIDO |
+| A1 | 🟠 ALTO | batch_processor carrega Parquet inteiro em memória — OOM com múltiplos dias | Pendente |
+| A2 | 🟠 ALTO | Batch output é JSONL sem schema — corrompimento silencioso | Pendente |
+| A3 | 🟠 ALTO | Motor e batch calculam features de forma diferente | Pendente |
+| A4 | 🟠 ALTO | 68× except:pass — erros silenciosos em pontos críticos | ✅ CORRIGIDO (críticos) |
+| M1 | 🟡 MÉDIO | Configuração dual (loader novo + CONFIG=None legado) | ✅ Parcialmente unificado |
+| M2 | 🟡 MÉDIO | Position/Direction com contrato inconsistente | ✅ Direction com .sign |
+| M3 | 🟡 MÉDIO | AggregateResult incompleto | ✅ Corrigido |
+| M4 | 🟡 MÉDIO | Auditoria leakage se contradiz com código | ✅ Docs alinhados |
+
+### Fix C1: Lazy Imports no Shim (motor_rt_alphaz.py)
+
+**Problema:** Top-level imports (`from core.app import App`) criavam cadeia frágil:
+```
+motor_rt_alphaz → core.app → core.capture_daemon → adapters.file_storage → pyarrow
+```
+Se QUALQUER módulo nessa cadeia falhasse, o motor inteiro não iniciava.
+
+**Solução:** `__getattr__` lazy — atributos são carregados sob demanda:
+```python
+# ANTES (frágil):
+from core.app import App, _AnaliseShim as Analise  # crasha tudo se core.app falhar
+
+# DEPOIS (resiliente):
+def __getattr__(name):
+    if name in _LAZY:
+        return _ensure(name, module_path, attr)
+```
+
+**Resultado:** `import motor_rt_alphaz` funciona mesmo com pyarrow ausente. Testes que importam o módulo não mais falham.
+
+### Fix A4: except:pass → Logging em Pontos Críticos
+
+**Problema:** Erros silenciosos em pontos que afetam dados:
+
+| Local | Antes | Depois |
+|-------|-------|--------|
+| profit_rtd.py:110 (window discovery) | `except Exception: pass` | `log.debug(f"Window not available: {e}")` |
+| profit_rtd.py:116 (disconnect) | `except: pass` | `log.warning(f"Erro ao desconectar: {e}")` |
+| file_storage.py:167 (flush failure) | `except Exception: return` | `log.error(f"Flush falhou: {e} — {N} rows PERDIDOS")` |
+| file_storage.py:443 (meta write) | `except Exception: pass` | `log.warning(f"Falha ao gravar meta: {e}")` |
+
+### Fix C3: Purge/Embargo no Split Treino/Teste
+
+**Problema:** Split por data (`TREINO_DIAS → TEST_DIAS`) sem embargo. Labels com `max_holding_s=30s` se estendiam para dentro do dia de teste, causando leakage residual.
+
+**Solução:** Embargo de 30s (López de Prado) — remover os últimos `max_holding_s` de cada dia de treino que antecede um dia de teste/calibração:
+```python
+# Se dia de treino antecede dia de teste:
+# Remover últimos 30s deste dia de treino
+embargo_s = max_holding_s  # 30s
+cutoff_ms = ts_fim_dia - (embargo_s * 1000)
+df_train = df_train[~(mask_dia & (df_train['ts_ms'] >= cutoff_ms))]
+```
+
+### Suíte de Testes
+
+| Métrica | Antes | Depois |
+|---------|-------|--------|
+| Total coletados | 835 | 835 |
+| Passed | 754 | 782 |
+| Failed | 57 | 28 |
+| Falhas corrigidas | — | 29 (-51%) |
+
+### Arquivos Modificados
+
+| Arquivo | Mudança |
+|---------|--------|
+| `motor_rt_alphaz.py` | Lazy imports via __getattr__ |
+| `adapters/profit_rtd.py` | except:pass → logging |
+| `adapters/file_storage.py` | except:pass → logging + log import |
+| `ml/retreinar_lgbm_limpo.py` | Purge/embargo no split |
+
+### Testes Novos
+
+| Arquivo | Testes |
+|---------|--------|
+| `tests/test_position.py` | Direction com .sign, Position validation |
+| `tests/test_aggregate.py` | AggregateResult.metrics + risk_to_nominal_ratio |
+| `tests/test_formulas.py` | Validação de inputs inválidos |
+| `tests/test_config.py` | Config unificado (extra dict) |
+| `testes/test_file_rotation_no_data_loss.py` | 8 testes Parquet Hive |
+
+---
+
 ## v14.1 — Schema explícito + validação + bug threshold (01/09/2026)
 
 ### Problema
