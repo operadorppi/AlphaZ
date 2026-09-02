@@ -55,6 +55,7 @@ class ProfitRTDAdapter(MarketDataSource):
             backward_sequence_threshold=3,
         )
         self._vistos_tt = defaultdict(OrderedDict)  # (sym) -> OrderedDict[signature -> True]
+        self._tt_recebidos = defaultdict(int)  # (sym) -> total trades received (running counter)
         self._baseline_pending = defaultdict(lambda: True)
         self._book_cells = defaultdict(lambda: defaultdict(dict)) # (sym) -> {linha: {field: val}}
         self._last_book_yield = defaultdict(float)
@@ -250,6 +251,7 @@ class ProfitRTDAdapter(MarketDataSource):
                         # Marcar como visto (LRU eviction se exceder limite)
                         vistos = self._vistos_tt[sym]
                         vistos[sig] = True
+                        self._tt_recebidos[sym] += 1
                         if len(vistos) > self._dedup_max_per_ativo:
                             # Remove o item mais antigo (primeiro inserido)
                             vistos.popitem(last=False)
@@ -327,6 +329,7 @@ class ProfitRTDAdapter(MarketDataSource):
                         
                         vistos = self._vistos_tt[sym]
                         vistos[sig] = True
+                        self._tt_recebidos[sym] += 1
                         if len(vistos) > self._dedup_max_per_ativo:
                             vistos.popitem(last=False)
                         
@@ -407,6 +410,7 @@ class ProfitRTDAdapter(MarketDataSource):
         return {
             sym: {
                 'asssinaturas_vistas': len(vistos),
+                'tt_recebidos': self._tt_recebidos.get(sym, 0),
                 'baseline_pendente': self._baseline_pending.get(sym, False),
             }
             for sym, vistos in self._vistos_tt.items()

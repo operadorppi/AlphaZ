@@ -625,7 +625,7 @@ function render(){
         for(const [k,v] of Object.entries(rt.dedup_stats)){
           rows += '<div style="display:flex;justify-content:space-between;gap:10px;padding:2px 0;border-bottom:1px solid #111a2e">'+
             '<span>'+esc(k)+'</span>'+
-            '<span class="mono" style="color:var(--muted)">dedup: '+fmt(v.asssinaturas_vistas||v.assinaturas_vistas||0,0)+' assinaturas'+(v.baseline_pendente?' · baseline pendente':'')+'</span>'+
+            '<span class="mono" style="color:var(--muted)">'+fmt(v.tt_recebidos||0,0)+' trades recebidos · cache: '+fmt(v.asssinaturas_vistas||v.assinaturas_vistas||0,0)+(v.baseline_pendente?' · baseline pendente':'')+'</span>'+
             '</div>';
         }
       }
