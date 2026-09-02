@@ -274,6 +274,7 @@ class MarketState:
             self.seg_atual = 0
             self.buffer.clear()
             self.ohlc.clear()
+            self.agressao_por_corretora.clear()
 
         # Mudança de segundo
         if seg > self.seg_atual:
@@ -318,17 +319,13 @@ class MarketState:
             ativo, tms, preco,
             1.0 if agr == 'Comprador' else (-1.0 if agr == 'Vendedor' else 0.0))
 
-        # Agressão por corretora
+        # Agressão por corretora (comprado/vendido = fluxo completo)
         if comp and comp not in ('None', ''):
             sd = self.agressao_por_corretora[ativo].setdefault(comp, {'c': 0, 'v': 0})
-            if agr == 'Comprador':
-                sd['c'] += qtd
-            elif agr == 'Vendedor':
-                sd['v'] += qtd
+            sd['c'] += qtd  # comprador SEMPRE compra (agressivo ou passivo)
         if vend and vend not in ('None', ''):
             sd = self.agressao_por_corretora[ativo].setdefault(vend, {'c': 0, 'v': 0})
-            if agr == 'Vendedor':
-                sd['v'] += qtd
+            sd['v'] += qtd  # vendedor SEMPRE vende (agressivo ou passivo)
 
         return True
 
