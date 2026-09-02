@@ -104,7 +104,33 @@ def main():
     df_cal = df[df['data'].isin(CAL_DIAS)].copy()
     df_test = df[df['data'].isin(TEST_DIAS)].copy()
     
-    print(f'\nSplit:')
+    # ============================================================
+    # PURGE/EMBARGO (López de Prado)
+    # Remover os últimos max_holding_s de cada dia de treino que
+    # antecede um dia de teste/calibração, evitando leakage na
+    # fronteira (label estende além do boundary do dia).
+    # ============================================================
+    max_holding_s = 30  # padrão do labeler
+    embargo_s = max_holding_s  # embargo = holding (conservador)
+    todos_dias_ordenados = sorted(set(TREINO_DIAS + CAL_DIAS + TEST_DIAS))
+    dias_teste_cal = set(CAL_DIAS + TEST_DIAS)
+    
+    n_antes = len(df_train)
+    for dia in TREINO_DIAS:
+        proximo_dia = dia.toordinal() + 1
+        from datetime import timedelta
+        proximo_date = dia + timedelta(days=1)
+        if proximo_date in dias_teste_cal:
+            # Remover últimos embargo_s deste dia de treino
+            ts_inicio = int((proximo_date - timedelta(days=1)).strftime('%s')) * 1000
+            ts_fim = int(proximo_date.strftime('%s')) * 1000
+            mask_dia = df_train['data'] == dia
+            cutoff_ms = ts_fim - (embargo_s * 1000)
+            df_train = df_train[~(mask_dia & (df_train['ts_ms'] >= cutoff_ms))]
+    n_depois = len(df_train)
+    print(f'  Embargo: {n_antes - n_depois} linhas removidas (últimos {embargo_s}s de treino antes de teste)')
+    
+    print(f'\nSplit (com embargo):')
     print(f'  TREINO: {len(df_train)} linhas')
     print(f'  CAL:    {len(df_cal)} linhas')
     print(f'  TESTE:  {len(df_test)} linhas')
