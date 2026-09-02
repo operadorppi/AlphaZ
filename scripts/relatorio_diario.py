@@ -23,6 +23,7 @@ import os
 import sys
 from datetime import date, timedelta
 from pathlib import Path
+from adapters.file_storage import find_hive_files
 
 DEFAULT_SAVE_DIR = r'D:\MarketData\mimo'
 MIN_TRADES_POR_DIA = 500
@@ -50,70 +51,141 @@ def ultimos_dias_uteis(n=5, hoje=None):
     return ','.join(dias)
 
 
+def _ler_negocios_hive(base, data_str):
+    """Le negocios de Parquet Hive (RAW/data_type=TT/date=.../).
+    Retorna (arquivos_neg, n_negocios, por_ativo, ts_min, ts_max, book_snapshots)."""
+    from adapters.file_storage import find_hive_files
+    tt_files = find_hive_files(str(base), dia_str=data_str, data_type='TT')
+    book_files = find_hive_files(str(base), dia_str=data_str, data_type='BOOK')
+    if not tt_files:
+        return [], 0, {}, None, None, 0
+
+    try:
+        import pyarrow.parquet as pq
+    except ImportError:
+        return [], 0, {}, None, None, 0
+
+    negocios = 0
+    por_ativo = {}
+    ts_min = None
+    ts_max = None
+    book_snaps = 0
+
+    for tf in tt_files:
+        try:
+            t = pq.read_table(tf)
+            rows = t.num_rows
+            negocios += rows
+            ativos = t.column('ativo').to_pylist()
+            for a in ativos:
+                por_ativo[a] = por_ativo.get(a, 0) + 1
+            # ts_ns -> ts_ms
+            ts_col = t.column('ts_ns').to_pylist()
+            for ts_ns in ts_col:
+                ts_ms = ts_ns // 1_000_000 if ts_ns and ts_ns > 1e15 else ts_ns
+                if ts_ms:
+                    ts_min = ts_ms if ts_min is None else min(ts_min, ts_ms)
+                    ts_max = ts_ms if ts_max is None else max(ts_max, ts_ms)
+        except Exception:
+            continue
+
+    for bf in book_files:
+        try:
+            book_snaps += pq.read_table(bf).num_rows
+        except Exception:
+            continue
+
+    return tt_files, negocios, por_ativo, ts_min, ts_max, book_snaps
+
+
 def validar_dia(save_dir, data_str):
-    """Valida a captura de um dia (raw_negocios_ms_*, raw_book_ms_*,
-    raw_meta_*). Retorna dict com métricas e lista de problemas."""
+    """Valida a captura de um dia (Hive Parquet ou JSONL legado).
+    Retorna dict com metricas e lista de problemas."""
     base = Path(save_dir)
     problemas = []
-    neg_arquivos = sorted(base.glob(f'raw_negocios_ms_*{data_str}*.jsonl'))
-    book_arquivos = sorted(base.glob(f'raw_book_ms_*{data_str}*.jsonl'))
-    meta_arquivos = sorted(base.glob(f'raw_meta_*{data_str}*.json'))
+
+    # v14: tentar Hive Parquet primeiro
+    raw_tt = base / 'RAW' / 'data_type=TT'
+    usa_hive = raw_tt.exists()
+
+    if usa_hive:
+        tt_files, negocios, por_ativo, ts_min, ts_max, book_snaps = \
+            _ler_negocios_hive(base, data_str)
+        neg_arquivos = tt_files
+        book_arquivos = find_hive_files(str(base), dia_str=data_str, data_type='BOOK') if tt_files else []
+        meta_arquivos = sorted(base.glob(f'raw_meta_*{data_str}*.json'))
+    else:
+        # Fallback: JSONL legado
+        neg_arquivos = sorted(base.glob(f'raw_negocios_ms_*{data_str}*.jsonl'))
+        book_arquivos = sorted(base.glob(f'raw_book_ms_*{data_str}*.jsonl'))
+        meta_arquivos = sorted(base.glob(f'raw_meta_*{data_str}*.json'))
+        negocios = 0
+        por_ativo = {}
+        ts_min = None
+        ts_max = None
+        book_snaps = 0
 
     info = {
         'data': data_str,
+        'fonte': 'hive' if usa_hive else 'jsonl',
         'arquivos_negocios': len(neg_arquivos),
         'arquivos_book': len(book_arquivos),
         'arquivos_meta': len(meta_arquivos),
-        'negocios': 0,
-        'book_snapshots': 0,
-        'por_ativo': {},
+        'negocios': negocios,
+        'book_snapshots': book_snaps,
+        'por_ativo': por_ativo,
         'rejeitados': {'ts_futuro': 0, 'ts_antigo': 0, 'qtd': 0,
                        'preco': 0, 'dup': 0, 'overflow': 0},
-        'ts_min': None, 'ts_max': None,
+        'ts_min': ts_min, 'ts_max': ts_max,
         'span_horas': None,
         'problemas': problemas,
     }
 
     if not neg_arquivos:
-        problemas.append(f'sem arquivos de negócios para {data_str}')
+        problemas.append(f'sem arquivos de negocios para {data_str}')
         return info
 
-    # Rejeitados vindos dos metadados das sessões (se a sessão fechou)
+    # Se JSONL, contar linha a linha (legado)
+    if not usa_hive:
+        for nf in neg_arquivos:
+            with open(nf, encoding='utf-8') as fh:
+                for linha in fh:
+                    linha = linha.strip()
+                    if not linha:
+                        continue
+                    try:
+                        r = json.loads(linha)
+                    except Exception:
+                        problemas.append(f'linha invalida em {nf.name}')
+                        continue
+                    negocios += 1
+                    ativo = r.get('ativo', '?')
+                    por_ativo[ativo] = por_ativo.get(ativo, 0) + 1
+                    ts = r.get('ts_ms', 0)
+                    if ts:
+                        ts_min = ts if ts_min is None else min(ts_min, ts)
+                        ts_max = ts if ts_max is None else max(ts_max, ts)
+        info['negocios'] = negocios
+        info['por_ativo'] = por_ativo
+        info['ts_min'] = ts_min
+        info['ts_max'] = ts_max
+
+        for bf in book_arquivos:
+            with open(bf, encoding='utf-8') as fh:
+                info['book_snapshots'] += sum(1 for ln in fh if ln.strip())
+
+    # Rejeitados vindos dos metadados das sessoes
     for mf in meta_arquivos:
         try:
             m = json.loads(mf.read_text(encoding='utf-8'))
             for k, v in m.get('rejeitados', {}).items():
                 info['rejeitados'][k] = info['rejeitados'].get(k, 0) + int(v or 0)
         except Exception:
-            problemas.append(f'meta ilegível: {mf.name}')
-
-    # Negócios (linha a linha; arquivos podem estar com rotação _pN)
-    for nf in neg_arquivos:
-        with open(nf, encoding='utf-8') as fh:
-            for linha in fh:
-                linha = linha.strip()
-                if not linha:
-                    continue
-                try:
-                    r = json.loads(linha)
-                except Exception:
-                    problemas.append(f'linha inválida em {nf.name}')
-                    continue
-                info['negocios'] += 1
-                ativo = r.get('ativo', '?')
-                info['por_ativo'][ativo] = info['por_ativo'].get(ativo, 0) + 1
-                ts = r.get('ts_ms', 0)
-                if ts:
-                    info['ts_min'] = ts if info['ts_min'] is None else min(info['ts_min'], ts)
-                    info['ts_max'] = ts if info['ts_max'] is None else max(info['ts_max'], ts)
-
-    for bf in book_arquivos:
-        with open(bf, encoding='utf-8') as fh:
-            info['book_snapshots'] += sum(1 for ln in fh if ln.strip())
+            problemas.append(f'meta ilegivel: {mf.name}')
 
     # ---- Regras de qualidade ----
     if info['negocios'] < MIN_TRADES_POR_DIA:
-        problemas.append(f'poucos negócios: {info["negocios"]} < {MIN_TRADES_POR_DIA}')
+        problemas.append(f'poucos negocios: {info["negocios"]} < {MIN_TRADES_POR_DIA}')
     if info['rejeitados']['ts_antigo'] > max(50, info['negocios'] * MAX_REJ_TS_ANTIGO_PCT / 100):
         problemas.append(f'muitos rejeitados ts_antigo: {info["rejeitados"]["ts_antigo"]}')
     if info['rejeitados']['dup'] > max(100, info['negocios'] * MAX_REJ_DUP_PCT / 100):
