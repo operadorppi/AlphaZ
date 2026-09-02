@@ -288,6 +288,7 @@ class ProfitRTDAdapter(MarketDataSource):
                     vistos = self._vistos_tt[sym]
                     vistos[sig] = True
                     self._tt_recebidos[sym] += 1
+                    self._tt_diag[sym]['tt_emitted'] += 1  # v14.5 diagnostic
                     if len(vistos) > self._dedup_max_per_ativo:
                         vistos.popitem(last=False)
                     
@@ -384,6 +385,7 @@ class ProfitRTDAdapter(MarketDataSource):
                     vistos = self._vistos_tt[sym]
                     vistos[sig] = True
                     self._tt_recebidos[sym] += 1
+                    self._tt_diag[sym]['rlp_emitted'] += 1  # v14.5 diagnostic
                     if len(vistos) > self._dedup_max_per_ativo:
                         vistos.popitem(last=False)
                     
