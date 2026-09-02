@@ -52,7 +52,7 @@ class ProfitRTDAdapter(MarketDataSource):
         self._ordering_detector = EventOrderingDetector(
             late_threshold_ms=500,
             forward_jump_threshold_ms=60_000,
-            backward_sequence_threshold=3,
+            backward_sequence_threshold=100,
         )
         self._vistos_por_linha = defaultdict(OrderedDict)  # (sym) -> OrderedDict[(linha, DAT) -> True] (v14.4)
         self._tt_recebidos = defaultdict(int)  # (sym) -> total trades received (running counter)

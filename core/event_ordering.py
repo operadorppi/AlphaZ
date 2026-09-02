@@ -70,13 +70,13 @@ class EventOrderingDetector:
     def __init__(self,
                  late_threshold_ms: int = 500,
                  forward_jump_threshold_ms: int = 60_000,
-                 backward_sequence_threshold: int = 3,
+                 backward_sequence_threshold: int = 100,
                  max_seen_timestamps: int = 10_000):
         """
         Args:
             late_threshold_ms: lag > que isso = evento atrasado (default 500ms)
             forward_jump_threshold_ms: gap > que isso = salto temporal anormal (default 60s)
-            backward_sequence_threshold: N eventos seguidos no passado = sequência regressiva (default 3)
+            backward_sequence_threshold: N eventos seguidos no passado = sequência regressiva (default 100)
             max_seen_timestamps: máximo de timestamps por ativo na estrutura de dedup (default 10K)
         """
         self._lock = threading.RLock()
