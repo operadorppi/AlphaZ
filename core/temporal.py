@@ -108,7 +108,7 @@ def dat_to_epoch_ms(dat_str: str, ref_dt: Optional[datetime] = None) -> int:
 
 def validate_event_ts(event_ts_ms: int, receive_ts_ns: int,
                        max_future_s: float = 30.0,
-                       max_past_s: float = 600.0) -> tuple[bool, str]:
+                       max_past_s: float = 300.0) -> tuple[bool, str]:
     """Valida timestamp do evento de mercado.
 
     Regras:
@@ -122,9 +122,11 @@ def validate_event_ts(event_ts_ms: int, receive_ts_ns: int,
         event_ts_ms: timestamp do evento em epoch ms
         receive_ts_ns: timestamp de recebimento em epoch ns
         max_future_s: tolerância para o futuro (default 30s)
-        max_past_s: tolerância para o passado (default 600s = 10min)
-           Cobre o buffer RTD quando o motor conecta tarde.
-           O RTD envia trades históricos da sessão ao conectar.
+        max_past_s: tolerância para o passado (default 300s = 5min)
+           v14.8: alinhado com o FileStorage (rejeita > 300s). Antes era
+           600s no adapter e 300s na gravação — eventos entre 300-600s
+           passavam no adapter e eram descartados silenciosamente.
+           A gravação é sempre tempo real (baseline absorve o 1º ciclo).
 
     Returns:
         (valido: bool, motivo: str)

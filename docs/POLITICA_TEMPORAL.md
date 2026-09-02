@@ -77,6 +77,12 @@ Antes de emitir um `TradeEvent`, o adapter valida o timestamp via `validate_even
 
 **Motivo:** timestamps no futuro indicam clock drift ou dados corrompidos. Timestamps muito no passado indicam replay ou dados antigos sendo reprocessados.
 
+> **v14.8:** o limite de passado (300s) é o MESMO no adapter e no
+> `FileStorage`. Antes havia divergência (adapter 600s, storage 300s) —
+> eventos entre 300-600s passavam no adapter e eram descartados
+> silenciosamente na gravação. A captura é sempre tempo real; o baseline
+> já absorve o 1º ciclo do RTD.
+
 ---
 
 ## 4. DETECÇÃO DE ANOMALIAS TEMPORAIS (Fase 3)
@@ -408,7 +414,35 @@ O watchdog (ou dashboard) pode verificar `data_loss_detected` e `queue_pct > 80`
 
 ---
 
-## 10. DADOS HISTÓRICOS
+## 10. GRAVAÇÃO SEPARADA POR ATIVO (v13.2)
+
+### Arquitetura (01/09/2026)
+
+Cada tipo de dado gera **um arquivo JSONL por ativo**, eliminando contaminação cruzada:
+
+```
+raw_negocios_ms_{session}_WINV26.jsonl    ← só WIN
+raw_negocios_ms_{session}_INDV26.jsonl    ← só IND
+raw_negocios_ms_{session}_WDOV26.jsonl    ← só WDO
+raw_negocios_ms_{session}_DOLV26.jsonl    ← só DOL
+raw_book_ms_{session}_WINV26.jsonl        ← só WIN
+raw_book_ms_{session}_INDV26.jsonl        ← só IND
+raw_book_ms_{session}_WDOV26.jsonl        ← só WDO
+raw_book_ms_{session}_DOLV26.jsonl        ← só DOL
+raw_rlp_ms_{session}_WINV26.jsonl         ← só WIN
+raw_rlp_ms_{session}_WDOV26.jsonl         ← só WDO
+```
+
+### Regras de Gravação
+
+1. **Zero contaminação:** cada arquivo contém apenas registros do ativo correspondente
+2. **Flush por ativo:** buffer e flush são independentes por ativo
+3. **Rotação por ativo:** `max_bytes_por_arquivo` é verificado por ativo individual
+4. **Compatibilidade:** o `converter_brutos_parquet.py` aceita tanto arquivos misturados (antigos) quanto separados (novos)
+
+---
+
+## 11. DADOS HISTÓRICOS
 
 ### Migração
 
