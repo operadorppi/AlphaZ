@@ -106,10 +106,10 @@ def main():
         print('MODO: --dry-run (nenhuma execução real)\n')
 
     # 0. Converter JSONL brutos em Parquet por ativo
-    print(f'\n[0/7] Conversão JSONL → Parquet ({dia})')
+    print(f'\n[0/7] Conversao JSONL -> Parquet ({dia})')
     if not args.dry_run:
         run('scripts/converter_brutos_parquet.py', ['--dia', dia, '--save-dir', save_dir],
-            log_file, 0, 'Conversão JSONL → Parquet', dry_run=args.dry_run)
+            log_file, 0, 'Conversao JSONL -> Parquet', dry_run=args.dry_run)
     else:
         print(f'  converter_brutos_parquet.py --dia {dia}')
 
