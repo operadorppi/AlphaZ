@@ -23,39 +23,40 @@ from adapters.rtd_connection import sstr, fnum, fint
 
 
 class FakeAdapter:
-    """Réplica mínima da lógica de lote do ProfitRTDAdapter para teste."""
+    """Réplica mínima da lógica de lote do ProfitRTDAdapter para teste.
+
+    v14.7: RTD nunca envia linha duplicada → sem dedup por linha.
+    Apenas coerência de lote (Frankenstein) + baseline (1º ciclo).
+    """
 
     def __init__(self, max_per_ativo=50000):
-        self._vistos_tt = defaultdict(OrderedDict)
         self._baseline_pending = defaultdict(lambda: True)
         self._cell_lote = defaultdict(dict)
         self._lote_atual = 0
-        self._max = max_per_ativo
         self.eventos = []
 
     def processar_campo(self, sym, linha, field, val):
         """Simula a chegada de 1 campo num ciclo RefreshData.
 
-        Retorna True se um trade foi emitido (gatilho DAT coerente).
-        Replica o adapter v14.3: check de coerência nos 3 campos,
-        porque células chegam em ordem arbitrária dentro do ciclo.
+        Retorna True se um trade foi emitido (campos coerentes).
+        Replica o adapter v14.7: coerência de lote em qualquer
+        campo-chave (DAT/PRE/QUL), sem dedup por linha.
         """
         cell = self._cell_lote.setdefault((sym, linha), {}).setdefault('_cell', {})
         lotes = self._cell_lote[(sym, linha)]
         cell[field] = val
         lotes[field] = self._lote_atual
 
-        # Coerência de lote (replica o adapter v14.3 — check nos 3 campos)
-        # APENAS no gatilho DAT: é o momento de emissão. PRE/QUL que chegam
-        # antes do DAT apenas preenchem a linha (o trade é emitido quando o
-        # DAT re-chegar/confirmar, o que o RTD faz no ciclo seguinte).
-        if field == 'DAT':
-            lote_dat = lotes.get('DAT', 0)
-            if lotes.get('PRE', 0) != lote_dat or lotes.get('QUL', 0) != lote_dat:
-                return False  # Frankenstein — aguardar coerência
-        else:
-            # Só o DAT dispara emissão (replica o adapter)
+        # Só processa quando algum dos 3 campos-chave chega
+        if field not in ('DAT', 'PRE', 'QUL'):
             return False
+
+        # Coerência de lote: todos os 3 campos devem ter o mesmo lote
+        lote_ref = lotes.get('DAT', 0)
+        if (lote_ref == 0
+                or lotes.get('PRE', 0) != lote_ref
+                or lotes.get('QUL', 0) != lote_ref):
+            return False  # Frankenstein — aguardar coerência
 
         pre = fnum(cell.get('PRE'))
         if pre <= 0:
@@ -64,26 +65,8 @@ class FakeAdapter:
         if qtd <= 0:
             return False
 
-        sig = (
-            sstr(cell.get('DAT')),
-            sstr(cell.get('ACP')),
-            pre,
-            qtd,
-            sstr(cell.get('AVD')),
-            sstr(cell.get('AGR')),
-            sstr(cell.get('AGAG')),
-        )
-
         if self._baseline_pending[sym]:
-            self._vistos_tt[sym][sig] = True
             return False
-        if sig in self._vistos_tt[sym]:
-            return False
-
-        vistos = self._vistos_tt[sym]
-        vistos[sig] = True
-        if len(vistos) > self._max:
-            vistos.popitem(last=False)
 
         self.eventos.append({'sym': sym, 'dat': sstr(cell.get('DAT')), 'pre': pre, 'qtd': qtd})
         return True
@@ -102,24 +85,16 @@ def _cell(dat='10:30:00.000', acp='XP', pre=187700.0, qtd=5, avd='BTG', agr='com
 
 class TestLoteCoerencia:
     def test_mesmo_lote_emite_trade(self):
-        """DAT+PRE+QUL no mesmo ciclo. DAT pode chegar antes dos outros:
-        o trade é emitido quando o RTD re-entrega o DAT no ciclo seguinte
-        (células estáveis são re-entregues a cada refresh)."""
+        """DAT+PRE+QUL no mesmo ciclo → emitido quando o ÚLTIMO dos 3
+        campos-chave chega (gatilho em qualquer campo, v14.5)."""
         a = FakeAdapter()
         a.fechar_baseline()
         a.novo_ciclo()
         c = _cell()
         for f, v in c.items():
             a.processar_campo('WINV26', 1, f, v)
-        # DAT chegou 1o no ciclo 1 → ainda não emitido
-        assert len(a.eventos) == 0
-        # Ciclo 2: RTD re-entrega a linha estável (PRE/QUL depois DAT)
-        a.novo_ciclo()
-        a.processar_campo('WINV26', 1, 'PRE', 187700.0)
-        a.processar_campo('WINV26', 1, 'QUL', 5)
-        emitido = a.processar_campo('WINV26', 1, 'DAT', '10:30:00.000')
-        assert emitido, "DAT re-entregue com PRE/QUL do mesmo ciclo deve emitir"
-        assert len(a.eventos) == 1
+        # QUL (último dos 3 no dict) completa a coerência → emite no ciclo 1
+        assert len(a.eventos) == 1, f"Trade coerente deveria emitir, got {len(a.eventos)}"
 
     def test_shift_frankenstein_bloqueado(self):
         """DAT novo + PRE/QUL antigos (shift de linha) → BLOQUEADO."""
@@ -157,8 +132,9 @@ class TestLoteCoerencia:
         assert emitido, "Trade coerente deveria ser emitido"
         assert len(a.eventos) == 1
 
-    def test_dedup_assinatura_mantido(self):
-        """Mesmo trade (mesma assinatura) não é re-emitido em ciclos posteriores."""
+    def test_sem_dedup_por_linha(self):
+        """v14.7: RTD nunca envia linha duplicada → re-entrega coerente
+        de uma linha é emitida (cada linha é um trade real)."""
         a = FakeAdapter()
         a.fechar_baseline()
 
@@ -167,17 +143,17 @@ class TestLoteCoerencia:
         c = _cell()
         for f, v in c.items():
             a.processar_campo('WINV26', 1, f, v)
-        # Ciclos 2-3: RTD re-entrega a linha estável
-        for _ in range(2):
-            a.novo_ciclo()
-            a.processar_campo('WINV26', 1, 'PRE', 187700.0)
-            a.processar_campo('WINV26', 1, 'QUL', 5)
-            a.processar_campo('WINV26', 1, 'DAT', '10:30:00.000')
+        # Ciclo 2: re-entrega coerente (mesmo conteúdo, mesmo lote)
+        a.novo_ciclo()
+        a.processar_campo('WINV26', 1, 'PRE', 187700.0)
+        a.processar_campo('WINV26', 1, 'QUL', 5)
+        a.processar_campo('WINV26', 1, 'DAT', '10:30:00.000')
 
-        assert len(a.eventos) == 1, f"Dedup quebrado: {len(a.eventos)} eventos"
+        assert len(a.eventos) == 2, f"Sem dedup: 2 eventos, got {len(a.eventos)}"
 
     def test_trades_distintos_mesmo_lote(self):
-        """10 trades distintos no mesmo ciclo → 10 eventos (após re-entrega do DAT)."""
+        """10 trades distintos no mesmo ciclo → 10 eventos, sem dedup
+        por linha (cada linha coerente é um trade real, v14.7)."""
         a = FakeAdapter()
         a.fechar_baseline()
         # Ciclo 1: todas as linhas recebem todos os campos
@@ -186,14 +162,9 @@ class TestLoteCoerencia:
             c = _cell(dat=f'10:30:{i:02d}.000', pre=187700.0 + i)
             for f, v in c.items():
                 a.processar_campo('WINV26', i + 1, f, v)
-        assert len(a.eventos) == 0  # DATs chegaram antes dos PRE/QUL
-        # Ciclo 2: RTD re-entrega (PRE/QUL depois DAT)
-        a.novo_ciclo()
-        for i in range(10):
-            a.processar_campo('WINV26', i + 1, 'PRE', 187700.0 + i)
-            a.processar_campo('WINV26', i + 1, 'QUL', 5)
-            a.processar_campo('WINV26', i + 1, 'DAT', f'10:30:{i:02d}.000')
-        assert len(a.eventos) == 10, f"Esperado 10, got {len(a.eventos)}"
+        assert len(a.eventos) == 10, f"10 trades distintos deveriam emitir, got {len(a.eventos)}"
+        precos = {e['pre'] for e in a.eventos}
+        assert len(precos) == 10, f"Preços distintos preservados: {len(precos)}"
 
     def test_dedup_independente_por_ativo(self):
         """Mesma assinatura em ativos diferentes → emitido em ambos."""

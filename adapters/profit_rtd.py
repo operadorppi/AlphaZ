@@ -54,7 +54,6 @@ class ProfitRTDAdapter(MarketDataSource):
             forward_jump_threshold_ms=60_000,
             backward_sequence_threshold=100,
         )
-        self._vistos_por_linha = defaultdict(OrderedDict)  # (sym) -> OrderedDict[(linha, DAT) -> True] (v14.4)
         self._tt_recebidos = defaultdict(int)  # (sym) -> total trades received (running counter)
         self._baseline_pending = defaultdict(lambda: True)
         self._cell_lote = defaultdict(dict)  # (sym, linha) -> {field: lote_num} — ciclo RefreshData de cada campo
@@ -233,12 +232,6 @@ class ProfitRTDAdapter(MarketDataSource):
                             or lotes_linha.get('QUL', 0) != lote_ref):
                         continue  # Aguardar convergência — re-avalia no próximo campo
 
-                    # DAT-primário: se esta linha JÁ EMITIU este DAT
-                    dat_str = sstr(cell.get('DAT'))
-                    chave_linha = (sym, linha, dat_str)
-                    if chave_linha in self._vistos_por_linha[sym]:
-                        continue  # Re-entrega do mesmo trade nesta linha — descartar
-                    
                     # Validação de conteúdo
                     pre = fnum(cell.get('PRE'))
                     if pre <= 0:
@@ -247,18 +240,13 @@ class ProfitRTDAdapter(MarketDataSource):
                     if qtd <= 0:
                         continue
                     
-                    # Primeiro refresh absorve como baseline (evita emitir
-                    # histórico acumulado na primeira chamada de RefreshData)
+                    # v14.7: RTD nunca envia linha duplicada — nenhuma barreira
+                    # de dedup por linha. Só o baseline (1º ciclo) e a coerência
+                    # de lote filtram. Cada linha coerente é um trade real.
                     if self._baseline_pending[sym]:
-                        self._vistos_por_linha[sym][chave_linha] = True
                         continue
 
                     self._tt_recebidos[sym] += 1
-                    
-                    # v14.4: registrar chave DAT-primária SÓ NA EMISSÃO
-                    self._vistos_por_linha[sym][chave_linha] = True
-                    if len(self._vistos_por_linha[sym]) > self._dedup_max_per_ativo:
-                        self._vistos_por_linha[sym].popitem(last=False)
                     
                     # Fase 2: Preservar timestamp do mercado (DAT do Profit)
                     # NUNCA usar wall clock como timestamp do evento.
@@ -325,26 +313,16 @@ class ProfitRTDAdapter(MarketDataSource):
                             or lotes_linha.get('QUL', 0) != lote_ref):
                         continue
                     
-                    dat_str = sstr(cell.get('DAT'))
-                    chave_linha = ('rlp', sym, linha, dat_str)
-                    if chave_linha in self._vistos_por_linha[sym]:
-                        continue  # Re-entrega — chave registrada só na emissão
-                    
                     pre = fnum(cell.get('PRE'))
                     if pre <= 0: continue
                     qtd = fint(cell.get('QUL'))
                     if qtd <= 0: continue
                     
+                    # v14.7: RLP — mesmo princípio do TT, sem dedup por linha
                     if self._baseline_pending[sym]:
-                        self._vistos_por_linha[sym][chave_linha] = True
                         continue
                     
                     self._tt_recebidos[sym] += 1
-                    
-                    # v14.4: registrar chave DAT-primária SÓ NA EMISSÃO
-                    self._vistos_por_linha[sym][chave_linha] = True
-                    if len(self._vistos_por_linha[sym]) > self._dedup_max_per_ativo:
-                        self._vistos_por_linha[sym].popitem(last=False)
                     
                     dat_str = sstr(cell.get('DAT'))
                     event_ts_ms = dat_to_epoch_ms(dat_str)
@@ -430,7 +408,6 @@ class ProfitRTDAdapter(MarketDataSource):
         resultado = {}
         for sym in sorted(todos_ativos):
             resultado[sym] = {
-                'linhas_vistas': len(self._vistos_por_linha.get(sym, {})),
                 'tt_recebidos': self._tt_recebidos.get(sym, 0),
                 'baseline_pendente': self._baseline_pending.get(sym, False),
             }
@@ -438,7 +415,6 @@ class ProfitRTDAdapter(MarketDataSource):
 
     def _reset_dedup(self):
         """Reseta estado de deduplicação (para testes)."""
-        self._vistos_por_linha = defaultdict(OrderedDict)
         self._baseline_pending = defaultdict(lambda: True)
 
 # Re-exporta constantes dos novos módulos
