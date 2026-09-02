@@ -117,6 +117,9 @@ class Config:
     Todo campo tem valor explícito — não há default escondido aqui: os
     defaults já foram aplicados em ``load_config`` e registrados em
     ``sources``.
+
+    Campos extras (ativos, rtd, tick_values, etc.) ficam em ``extra``
+    para compatibilidade com o motor e outros módulos.
     """
 
     environment: str
@@ -128,6 +131,20 @@ class Config:
     sources: Mapping[str, str]  # chave -> origem (P1..P4) para auditoria
     legacy_used: tuple[str, ...] = ()  # chaves legadas que foram renomeadas
     warnings: tuple[str, ...] = ()
+    extra: Mapping[str, Any] = ()  # chaves operacionais (ativos, rtd, etc.)
+
+    def __getitem__(self, key: str) -> Any:
+        """Acesso dict-like para compatibilidade: config['ativos']."""
+        if hasattr(self, key):
+            return getattr(self, key)
+        return self.extra.get(key)
+
+    def get(self, key: str, default=None) -> Any:
+        """Acesso dict-like com default: config.get('ativos', [])."""
+        try:
+            return self[key]
+        except (AttributeError, KeyError):
+            return default
 
     # -- projeção para os gates (import local evita ciclo) ------------------
     def to_ml_policy(self):
@@ -213,7 +230,11 @@ def _validate_label(label: Any, path: str = "label") -> str:
 
 def _apply_legacy(mapping: dict[str, Any], path: str, known: frozenset[str],
                   legacy_used: list[str]) -> dict[str, Any]:
-    """Renomeia chaves legadas; conflito legado+atual ou chave proibida → erro."""
+    """Renomeia chaves legadas; conflito legado+atual ou chave proibida → erro.
+
+    Chaves que não estão em `known` NÃO são rejeitadas — são passadas
+    adiante para compatibilidade com o motor (que usa chaves como
+    'ativos', 'rtd', 'tick_values', etc.)."""
     out: dict[str, Any] = {}
     for key, value in mapping.items():
         p = f"{path}.{key}" if path else key
@@ -234,13 +255,11 @@ def _apply_legacy(mapping: dict[str, Any], path: str, known: frozenset[str],
                 raise ConfigError(f"{p}: chave legada {key!r} não é válida aqui")
             out[new] = value
             legacy_used.append(key)
-        elif key in known:
-            out[key] = value
         else:
-            raise ConfigError(
-                f"{p}: chave desconhecida {key!r}; chaves aceitas: "
-                f"{sorted(known)} (legadas: {sorted(LEGACY_KEY_MAP)})"
-            )
+            # Chave conhecida ou desconhecida — aceita em ambos os casos.
+            # Chaves desconhecidas ficam acessíveis via Config.extra
+            # para compatibilidade com o motor e outros módulos.
+            out[key] = value
     return out
 
 
@@ -393,6 +412,17 @@ def load_config(
         valid=lambda v, p: _validate_label(v, p),
     )
 
+    # Coletar chaves operacionais (não-ML) para Config.extra
+    _gate_keys = {
+        'environment', 'ml_required', 'fallback_enabled',
+        'require_replay_validated', 'max_drawdown_dia', 'label',
+        'environments',  # seção special
+    }
+    extra = {k: v for k, v in file_root.items() if k not in _gate_keys}
+    # Overrides também podem ter chaves extras
+    if overrides:
+        extra.update({k: v for k, v in overrides.items() if k not in _gate_keys})
+
     return Config(
         environment=env,
         ml_required=ml_required,
@@ -403,6 +433,7 @@ def load_config(
         sources=sources,
         legacy_used=tuple(legacy_used),
         warnings=tuple(warnings),
+        extra=extra,
     )
 
 

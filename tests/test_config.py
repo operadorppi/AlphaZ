@@ -132,11 +132,13 @@ class TestLegacyCompatibility:
         with pytest.raises(ConfigError, match="PROIBIDA|proibida"):
             load_config(path=cfg)
 
-    def test_unknown_key_raises(self, tmp_path):
+    def test_unknown_key_stored_in_extra(self, tmp_path):
+        """Chaves desconhecidas ficam em Config.extra (não rejeitadas)."""
         cfg = tmp_path / "config.json"
-        cfg.write_text(json.dumps({"foo_bar": True}), encoding="utf-8")
-        with pytest.raises(ConfigError, match="chave desconhecida|desconhecida"):
-            load_config(path=cfg)
+        cfg.write_text(json.dumps({"foo_bar": True, "ativos": ["WIN"]}), encoding="utf-8")
+        c = load_config(path=cfg)
+        assert c.extra.get("foo_bar") is True
+        assert c.extra.get("ativos") == ["WIN"]
 
 
 class TestValidation:
