@@ -437,20 +437,21 @@ class CaptureDaemon:
         draining = 0
         while not self._queue.empty():
             try:
-                tipo, dados = self._queue.get_nowait()                if tipo == 'neg':
-                        self._storage.registrar_negocios(dados)
-                    elif tipo == 'book':
-                        ativo, ts_ms, snap, bid_vol, ask_vol, levels = dados[:6]
-                        janela_id = dados[6] if len(dados) > 6 else 0
-                        window_name = dados[7] if len(dados) > 7 else ''
-                        received_at_ns = dados[8] if len(dados) > 8 else 0
-                        self._storage.registrar_book(ativo, ts_ms, snap, bid_vol, ask_vol,
-                                                     levels=levels, janela_id=janela_id,
-                                                     window_name=window_name,
-                                                     received_at_ns=received_at_ns)
-                    elif tipo == 'rlp':
-                        self._storage.registrar_rlp(dados)
-                    draining += 1
+                tipo, dados = self._queue.get_nowait()
+                if tipo == 'neg':
+                    self._storage.registrar_negocios(dados)
+                elif tipo == 'book':
+                    ativo, ts_ms, snap, bid_vol, ask_vol, levels = dados[:6]
+                    janela_id = dados[6] if len(dados) > 6 else 0
+                    window_name = dados[7] if len(dados) > 7 else ''
+                    received_at_ns = dados[8] if len(dados) > 8 else 0
+                    self._storage.registrar_book(ativo, ts_ms, snap, bid_vol, ask_vol,
+                                                 levels=levels, janela_id=janela_id,
+                                                 window_name=window_name,
+                                                 received_at_ns=received_at_ns)
+                elif tipo == 'rlp':
+                    self._storage.registrar_rlp(dados)
+                draining += 1
             except queue.Empty:
                 break
             except Exception as e:
