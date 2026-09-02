@@ -2,7 +2,7 @@
 import math
 import numpy as np
 from collections import defaultdict
-from features import fase_sessao, dias_ate_vencimento
+from features import fase_sessao, dias_ate_vencimento, _tod_de_ts
 
 class FeatureEngine:
     """Responsável pelo cálculo determinístico de features de microestrutura (Camada FEATURES)."""
@@ -103,7 +103,7 @@ class FeatureEngine:
         else:
             f['range_vol_bps'] = 0.0
         
-        f['fase_sessao'] = fase_sessao(seg * 1000)
+        f['fase_sessao'] = fase_sessao(_tod_de_ts(seg * 1000))
         f['dias_ate_venc'] = dias_ate_vencimento(ativo) or 0
 
         # Absorção
