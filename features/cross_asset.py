@@ -111,7 +111,9 @@ class CrossAssetEngine:
 
     def _get_prev_price(self, hist, ts_ms):
         prev = 0.0
-        for t, p, _, _ in hist:
+        # Snapshot: o deque pode estar sendo mutado pela thread de trading
+        # enquanto o dashboard itera (race condition → RuntimeError)
+        for t, p, _, _ in list(hist):
             if t >= ts_ms:
                 return prev
             prev = p
@@ -121,13 +123,13 @@ class CrossAssetEngine:
         agora_ms = _tod_ms()
         cutoff = agora_ms - self.janela_corr * 1000
         bins_win = {}
-        for t, p, aggr, imb in self.hist_win:
+        for t, p, aggr, imb in list(self.hist_win):
             if t < cutoff:
                 continue
             b = t // 1000
             bins_win[b] = aggr if campo == 'aggr' else imb
         bins_wdo = {}
-        for t, p, aggr, imb in self.hist_wdo:
+        for t, p, aggr, imb in list(self.hist_wdo):
             if t < cutoff:
                 continue
             b = t // 1000
@@ -152,12 +154,12 @@ class CrossAssetEngine:
         cutoff = agora_ms - 5000
         wdo_range = 0.0
         if self.hist_wdo:
-            recentes = [p for t, p, _, _ in self.hist_wdo if t >= cutoff]
+            recentes = [p for t, p, _, _ in list(self.hist_wdo) if t >= cutoff]
             if len(recentes) >= 2:
                 wdo_range = max(recentes) - min(recentes)
         win_range = 0.0
         if self.hist_win:
-            recentes = [p for t, p, _, _ in self.hist_win if t >= cutoff]
+            recentes = [p for t, p, _, _ in list(self.hist_win) if t >= cutoff]
             if len(recentes) >= 2:
                 win_range = max(recentes) - min(recentes)
         if wdo_range > 5 and win_range < 3:
@@ -189,7 +191,7 @@ class CrossAssetEngine:
                 break
         if wdo_move_t == 0:
             return 0.0
-        for t, p, _, _ in self.hist_win:
+        for t, p, _, _ in list(self.hist_win):
             if t > wdo_move_t:
                 win_prev = self._get_prev_price(self.hist_win, t)
                 win_delta = p - win_prev
@@ -207,7 +209,7 @@ class CrossAssetEngine:
         if abs(wdo_delta) < 1:
             return 0.0
         agora_ms = _tod_ms()
-        win_recentes = [(t, p) for t, p, _, _ in self.hist_win if t >= agora_ms - 2000]
+        win_recentes = [(t, p) for t, p, _, _ in list(self.hist_win) if t >= agora_ms - 2000]
         if len(win_recentes) < 2:
             return 0.0
         win_delta = win_recentes[-1][1] - win_recentes[0][1]
