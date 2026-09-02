@@ -285,7 +285,8 @@ class TestTimestampInvalido:
 
     def test_validacao_rejeita_timestamp_passado(self):
         """Timestamp muito no passado é rejeitado."""
-        past_ts = now_ms() - 600_000  # 10min no passado
+        # v14.3: threshold é 600s (buffer RTD), então usa 700s
+        past_ts = now_ms() - 700_000  # ~11.7min no passado
         ok, motivo = validate_event_ts(past_ts, now_ns())
         assert ok is False
         assert "passado" in motivo
