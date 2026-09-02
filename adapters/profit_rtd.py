@@ -346,7 +346,7 @@ class ProfitRTDAdapter(MarketDataSource):
                                       window_name=f'T&T{janela_idx}')
 
                 elif kind == "rlp":
-                    # v14.5: RLP — mesmo fix de coerência do fluxo TT
+                    # v14.5: RLP — coerência + gatilho em qualquer campo-chave
                     cell = self._book_cells[sym][linha]
                     cell[field] = val
                     lotes_linha = self._cell_lote[(sym, linha)]
@@ -355,6 +355,7 @@ class ProfitRTDAdapter(MarketDataSource):
                     if field not in ('DAT', 'PRE', 'QUL'):
                         continue
                     
+                    # Coerência: todos os 3 campos devem ter o mesmo lote
                     lote_ref = lotes_linha.get('DAT', 0)
                     if (lote_ref == 0
                             or lotes_linha.get('PRE', 0) != lote_ref
