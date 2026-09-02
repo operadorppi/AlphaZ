@@ -52,7 +52,7 @@ RAW_BASE = r'D:\MarketData\Profit\RAW'
 DATASET_BASE = r'D:\MarketData\mimo\26\dataset_final.parquet'
 DATASET_COMPL = r'D:\MarketData\mimo\26\dataset_final_completo.parquet'
 SAVE_DIR = r'D:\MarketData\mimo'
-ATIVOS = ['WINV26', 'WDOU26']
+ATIVOS = ['WINV26', 'WDOV26']
 
 
 def integrar(mes, ativos, ano=None, force=False):

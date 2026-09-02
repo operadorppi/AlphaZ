@@ -138,7 +138,7 @@ class MarketState:
             self.cross_manager = CrossAssetManager(
                 pairs=[[
                     self.config.get('ativo_principal', 'WINV26'),
-                    self.config.get('ativo_contexto', 'WDOU26'),
+                    self.config.get('ativo_contexto', 'WDOV26'),
                 ]],
             )
         # Manter referência para compatibilidade

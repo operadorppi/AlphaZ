@@ -221,7 +221,7 @@ class CrossAssetManager:
     """Gerencia múltiplos pares de CrossAssetEngine.
 
     Exemplo:
-        pairs = [["WINV26", "INDV26"], ["WDOU26", "DOLU26"]]
+        pairs = [["WINV26", "INDV26"], ["WDOV26", "DOLV26"]]
         manager = CrossAssetManager(pairs)
 
         # Ao receber um trade:

@@ -92,7 +92,7 @@ class App:
                         # Garantir chaves default que o código lê
                         self.config.setdefault('save_dir', r'D:\MarketData\mimo')
                         self.config.setdefault('ativo_principal', 'WINV26')
-                        self.config.setdefault('ativo_contexto', 'WDOU26')
+                        self.config.setdefault('ativo_contexto', 'WDOV26')
                         self.config.setdefault('ml_modelo', '')
                         self.config.setdefault('web_host', '127.0.0.1')
                         self.config.setdefault('web_port', 5001)
@@ -110,7 +110,7 @@ class App:
         self.data_source = data_source
         self.save_dir = self.config.get('save_dir', 'D:\\MarketData\\mimo')
         self.ativo_principal = self.config.get('ativo_principal', 'WINV26')
-        self.ativo_contexto = self.config.get('ativo_contexto', 'WDOU26')
+        self.ativo_contexto = self.config.get('ativo_contexto', 'WDOV26')
         self.session_ts = datetime.now().strftime('%Y%m%d_%H%M%S')
         self.tempo_inicio = time.time()
         self.revision = 0
@@ -402,7 +402,9 @@ class App:
             # 2. Gravação de captura bruta (Infra) — via daemon imortal
             self.capture_daemon.registrar_negocios([(
                 trade.symbol, trade.timestamp_ms, trade.price, trade.quantity,
-                trade.aggressor, trade.buyer, trade.seller
+                trade.aggressor, trade.buyer, trade.seller,
+                event.janela_id, event.window_name, event.is_rlp,
+                trade.received_at_ns, trade.sequence_id
             )])
 
             # 3. Alimentar Scorer ML (se disponível)
@@ -474,7 +476,8 @@ class App:
             trade: TradeEvent = event.payload
             self.capture_daemon.registrar_rlp([(
                 trade.symbol, trade.timestamp_ms, trade.price, trade.quantity,
-                trade.aggressor, trade.buyer, trade.seller
+                trade.aggressor, trade.buyer, trade.seller,
+                event.janela_id, event.window_name
             )])
 
             # 3. Alimentar Scorer ML PRIMEIRO (Inferência precisa rodar
@@ -582,7 +585,9 @@ class App:
                 'ask_vol': [l.volume for l in snapshot.asks[:500]],
             }
             self.capture_daemon.registrar_book(snapshot.symbol, snapshot.timestamp_ms,
-                                        snap_dict, bid_vol, ask_vol, levels=levels_data)
+                                        snap_dict, bid_vol, ask_vol, levels=levels_data,
+                                        janela_id=event.janela_id, window_name=event.window_name,
+                                        received_at_ns=snapshot.received_at_ns)
             
             # 3. Alimentar Scorer ML com o Book
             if self.scorer:

@@ -137,15 +137,15 @@ class TradeMetrics:
 #  ReplayEngine — motor de replay deterministico
 # ============================================================
 class ReplayEngine:
-    SLIPPAGE = {"WINV26": 2.0, "WDOU26": 0.5, "INDV26": 2.0, "DOLU26": 0.5}
+    SLIPPAGE = {"WINV26": 2.0, "WDOV26": 0.5, "INDV26": 2.0, "DOLV26": 0.5}
     # TP/SL padrao por ativo (pts do contrato)
-    TP_DEFAULT = {"WINV26": 100, "WDOU26": 30, "INDV26": 100, "DOLU26": 30}
-    SL_DEFAULT = {"WINV26": 50, "WDOU26": 20, "INDV26": 50, "DOLU26": 20}
+    TP_DEFAULT = {"WINV26": 100, "WDOV26": 30, "INDV26": 100, "DOLV26": 30}
+    SL_DEFAULT = {"WINV26": 50, "WDOV26": 20, "INDV26": 50, "DOLV26": 20}
 
     def __init__(self, config=None, modelo_path=None, instrumentos=None):
         self.config = config or {}
         self.modelo_path = modelo_path
-        self.instrumentos = instrumentos or ["WINV26", "WDOU26"]
+        self.instrumentos = instrumentos or ["WINV26", "WDOV26"]
         self.state = None
         self.signal_engine = None
         self.scorer = None
@@ -425,7 +425,7 @@ if __name__ == "__main__":
     engine = ReplayEngine(
         config=config,
         modelo_path=args.modelo,
-        instrumentos=[args.ativo, "WDOU26"],
+        instrumentos=[args.ativo, "WDOV26"],
     )
 
     if args.modo == "paper":

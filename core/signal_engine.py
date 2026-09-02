@@ -27,7 +27,7 @@ from features.feature_registry import REGISTRY
 from core.calibration import create_calibration_system
 from dataclasses import asdict
 from core.contracts import Signal
-from core.decision_journal import DecisionEntry
+from core.decision_journal import TradeDecision
 from features.feature_engine import FeatureEngine
 
 log = logging.getLogger(__name__)
@@ -37,7 +37,7 @@ class SignalEngine:
     """Recebe features, produz sinais. Não conhece posição nem risco."""
 
     def __init__(self, market_state, learning=None, regime=None, feature_engine=None, risk=None,
-                 config=None, ativo_principal='WINV26', ativo_contexto='WDOU26', scorer=None):
+                 config=None, ativo_principal='WINV26', ativo_contexto='WDOV26', scorer=None):
         self.state = market_state
         self.config = config or (market_state.config if market_state and hasattr(market_state, 'config') else {})
         if learning is not None:
@@ -75,6 +75,21 @@ class SignalEngine:
         self._normalizar_score = bool(self.config.get('normalizar_score', False))
         self._zscore_trackers = {}
         self._last_seg_calc = {}  # ativo -> ultimo seg com features calculadas
+    
+    def _get_valor_ponto(self, ativo: str) -> float:
+        """Retorna o valor do ponto em reais para o ativo (B3)."""
+        valores = {
+            'WIN': 0.20,
+            'IND': 1.00,
+            'WDO': 10.00,
+            'DOL': 50.00
+        }
+        # Busca pelo prefixo do ativo
+        for key in valores:
+            if key in ativo.upper():
+                return valores[key]
+        # Fallback seguro para ativos desconhecidos
+        return 0.20
 
     def calcular(self, seg, skip_avaliar=False):
         """Calcula features do segundo para todos os ativos no buffer.
@@ -330,7 +345,7 @@ class SignalEngine:
         # Confiança EWMA
         alpha = 0.3
         if abs(score) < 0.1:
-            self.confianca_ewma *= 0.85
+            self.confianca_ewma = max(0.15, self.confianca_ewma * 0.85)
         else:
             self.confianca_ewma = (1 - alpha) * self.confianca_ewma + alpha * abs(score)
 
@@ -365,13 +380,15 @@ class SignalEngine:
             timestamp_ms=int(f.get('time_ms', time.time() * 1000)),
             lado=lado_str,
             score=round(score, 3),
-            confianca=round(self.confianca_ewma, 3), # Usamos a EWMA como confiança principal
+            confianca=round(self.confianca_ewma, 3),
             motivos=motivos or ['neutro'],
             contrib=contrib,
             tp=tp, sl=sl,
             ml_prob=round(ml_prob, 3),
             preco_ref=preco,
-            horizonte=60
+            horizonte=60,
+            quantidade=1,
+            valor_ponto=self._get_valor_ponto(ativo)
         )
         self.sinais[ativo] = sig_obj
         
@@ -385,8 +402,11 @@ class SignalEngine:
             # Top 5 features por contribuição
             top_feat = {c[0]: round(c[1], 4) for c in contrib[:5] if len(c) >= 2}
             
-            entry = DecisionEntry(
-                ts_ms=int(f.get('time_ms', time.time() * 1000)),
+            entry = TradeDecision(
+                # 'time_ms' vem em MILISSEGUNDOS; os campos do journal sao em
+                # SEGUNDOS (unix). Sem a conversao, explain_decision() estoura.
+                timestamp_do_evento=float(f.get('time_ms', time.time() * 1000)) / 1000.0,
+                timestamp_de_processamento=time.time(),
                 ativo=ativo,
                 acao='SINAL',
                 lado=lado_str,
@@ -401,7 +421,9 @@ class SignalEngine:
                 motivos=motivos or ['neutro'],
                 features_relevantes=top_feat,
                 preco_ref=preco,
-                **ctx_feats,
+                # ctx_feats nao e campo da dataclass: espalhar como **kwargs
+                # estourava TypeError. Vai dentro de estado_sistema.
+                estado_sistema=dict(ctx_feats),
             )
             journal.registrar(entry)
         
@@ -463,3 +485,5 @@ class SignalEngine:
             else:
                 out[k] = v
         return out
+
+

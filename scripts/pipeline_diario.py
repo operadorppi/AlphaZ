@@ -18,7 +18,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 SAVE_DIR_DEFAULT = r'D:\MarketData\mimo'
-ATIVOS = ['WINV26', 'INDV26', 'WDOU26', 'DOLU26']
+ATIVOS = ['WINV26', 'INDV26', 'WDOV26', 'DOLV26']
 ATIVO = 'WINV26'  # principal (para compatibilidade)
 ATIVO_STR = '_'.join(ATIVOS)
 PYTHON = sys.executable
