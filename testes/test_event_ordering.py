@@ -91,16 +91,17 @@ class TestForaDeOrdem:
 class TestTimestampDuplicado:
     """3. Timestamp duplicado (mesmo event_ts_ms já visto)."""
 
-    def test_duplicado_detectado_e_rejeitado(self):
-        """Mesmo timestamp do mesmo ativo é rejeitado."""
+    def test_duplicado_detectado_mas_aceito(self):
+        """Mesmo timestamp do mesmo ativo é detectado como duplicado
+        (burst legítimo da B3) mas NÃO rejeitado (v14.6)."""
         det = EventOrderingDetector()
         det.check('WINV26', 1000, make_receive_ns(1000))
         result = det.check('WINV26', 1000, make_receive_ns(1000))
 
         assert result.is_duplicate is True
-        assert result.action == "REJECT"
-        assert result.reason == "duplicate_timestamp"
+        assert result.action == "ACCEPT"
         assert det.get_stats()['events_duplicate'] == 1
+        assert det.get_stats()['events_accepted'] == 2
 
     def test_mesmo_ts_em_ativos_diferentes_nao_e_duplicado(self):
         """Mesmo timestamp em ativos diferentes não é duplicado."""
@@ -226,13 +227,14 @@ class TestIndependenciaAtivo:
 class TestPoliticaDescarte:
     """8. Política de descarte/reordenação explícita."""
 
-    def test_duplicada_rejeitada(self):
-        """Duplicatas são REJEITADAS (não processadas)."""
+    def test_duplicada_aceita(self):
+        """Duplicatas são ACEITAS (v14.6 — burst trades legítimos do mesmo ms).
+        A dedup real acontece no adapter (DAT-primary + coerência)."""
         det = EventOrderingDetector()
         det.check('WINV26', 1000, make_receive_ns(1000))
         result = det.check('WINV26', 1000, make_receive_ns(1000))
 
-        assert result.action == "REJECT"
+        assert result.action == "ACCEPT"
 
     def test_fora_de_ordem_aceito(self):
         """Eventos fora de ordem isolados são ACEITOS (não descartados)."""

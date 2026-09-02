@@ -133,14 +133,83 @@ class CapturaEventosMS:
         if not HAS_PYARROW:
             raise RuntimeError("PyArrow é obrigatório para v14 (Parquet + Hive)")
 
+        # v14.7: consolidar fragmentos existentes da sessão antes de escrever
+        # novos (evita acumular milhares de arquivos pequenos após restarts).
+        self._consolidar_fragmentos_iniciais()
+
     # ---- Caminho Hive ----
 
     def _hive_dir(self, data_type, asset):
-        hoje = date.today()
+        # v14.7: usar a DATA DA SESSÃO (session_ts=YYYYMMDD_HHMMSS), não a
+        # data de hoje — sessões que cruzam a meia-noite ou reiniciadas em
+        # outro dia gravam na partição correta.
+        if len(self.session_ts) >= 8 and self.session_ts[:8].isdigit():
+            data_str = self.session_ts[:8]
+        else:
+            data_str = date.today().strftime('%Y%m%d')
         return (self.base_dir / 'RAW' /
                 f'data_type={data_type}' /
-                f'date={hoje.year}{hoje.month:02d}{hoje.day:02d}' /
+                f'date={data_str}' /
                 f'asset={asset}')
+
+    def _consolidar_fragmentos_iniciais(self):
+        """v14.7: Consolida fragmentos pequenos existentes da sessão atual
+        em 1 arquivo por partição, ANTES de qualquer escrita nova.
+
+        Seguro: roda no __init__, antes do daemon começar a consumir a fila.
+        Nunca apaga dados — escreve o consolidado, valida, e só então remove
+        os fragmentos originais.
+        """
+        raw_dir = self.base_dir / 'RAW'
+        if not raw_dir.exists():
+            return
+        data_str = self.session_ts[:8] if len(self.session_ts) >= 8 else ''
+        if not data_str.isdigit():
+            return
+        for dt_dir in sorted(raw_dir.glob('data_type=*')):
+            dt = dt_dir.name.replace('data_type=', '')
+            date_dir = dt_dir / f'date={data_str}'
+            if not date_dir.exists():
+                continue
+            for asset_dir in sorted(date_dir.glob('asset=*')):
+                asset = asset_dir.name.replace('asset=', '')
+                self._consolidar_fragmentos(dt, asset)
+
+    def _consolidar_fragmentos(self, data_type, asset):
+        """v14.7: Mescla fragmentos part-*.parquet de uma partição em 1 arquivo.
+        Escreve em arquivo temporário; só remove os originais após sucesso.
+        """
+        hdir = self._hive_dir(data_type, asset)
+        if not hdir.exists():
+            return
+        files = sorted(hdir.glob('part-*.parquet'))
+        if len(files) <= 1:
+            return
+        tmp = hdir / '_consolidating.parquet'
+        try:
+            tables = []
+            total = 0
+            for f in files:
+                t = pq.read_table(str(f))
+                tables.append(t)
+                total += t.num_rows
+            combined = pa.concat_tables(tables)
+            pq.write_table(combined, tmp, compression='snappy')
+            # Sucesso: substituir part-0000 e remover fragmentos antigos
+            out = hdir / 'part-0000.parquet'
+            if out.exists():
+                out.unlink(missing_ok=True)
+            tmp.replace(out)
+            for f in files:
+                if f.name != 'part-0000.parquet':
+                    f.unlink(missing_ok=True)
+            self._parte[(data_type, asset)] = 1
+            log.info(f"[PARQUET] Consolidados {len(files)} fragmentos -> 1 arquivo "
+                     f"({total:,} rows) {data_type}/{asset}")
+        except Exception as e:
+            log.warning(f"[PARQUET] Consolidacao falhou ({data_type}/{asset}): {e}")
+            if tmp.exists():
+                tmp.unlink(missing_ok=True)
 
     # ---- Escrita Parquet ----
 
@@ -155,6 +224,12 @@ class CapturaEventosMS:
 
         parte = self._parte[key]
         out_path = hdir / f'part-{parte:04d}.parquet'
+        # v14.7: nunca sobrescrever RAW existente — se o arquivo já existe
+        # (ex: restart do motor com parte reiniciada em 0), continuar a
+        # numeração. Isso elimina a perda silenciosa de dados no restart.
+        while out_path.exists():
+            parte += 1
+            out_path = hdir / f'part-{parte:04d}.parquet'
 
         try:
             schema = _SCHEMAS.get(data_type)
