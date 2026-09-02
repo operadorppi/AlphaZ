@@ -98,7 +98,7 @@ class CapturaEventosMS:
     TT: 1 row por negócio com todos os campos RAW.
     Timestamps: nanosegundos (ns) para preservar precisão."""
 
-    def __init__(self, base_dir, session_ts=None, flush_a_cada=500,
+    def __init__(self, base_dir, session_ts=None, flush_a_cada=3_000_000,
                  max_bytes_por_arquivo=100*1024*1024):
         self.base_dir = Path(base_dir)
         self.session_ts = session_ts or datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -117,7 +117,7 @@ class CapturaEventosMS:
         self.rejeitados = {'ts_futuro': 0, 'ts_antigo': 0, 'qtd': 0,
                            'preco': 0, 'dup': 0, 'overflow': 0}
         self._ultimo_flush = time.time()
-        self.flush_max_idade_s = 300.0  # v14.6: flush a cada 5 min (era 5s)
+        self.flush_max_idade_s = 900.0  # v14.7: flush a cada 15 min
 
         # Metadados
         self._meta = {
