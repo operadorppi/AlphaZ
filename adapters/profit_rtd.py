@@ -58,7 +58,6 @@ class ProfitRTDAdapter(MarketDataSource):
         self._vistos_por_linha = defaultdict(OrderedDict)  # (sym) -> OrderedDict[(linha, DAT) -> True] (v14.4)
         self._tt_recebidos = defaultdict(int)  # (sym) -> total trades received (running counter)
         self._baseline_pending = defaultdict(lambda: True)
-        self._tt_diag = defaultdict(lambda: defaultdict(int))  # v14.5: diagnostics per stage
         self._cell_lote = defaultdict(dict)  # (sym, linha) -> {field: lote_num} — ciclo RefreshData de cada campo
         self._lote_atual = 0  # contador de ciclos RefreshData
         self._book_cells = defaultdict(lambda: defaultdict(dict)) # (sym) -> {linha: {field: val}}
@@ -223,8 +222,7 @@ class ProfitRTDAdapter(MarketDataSource):
                     cell[field] = val
                     lotes_linha = self._cell_lote[(sym, linha)]
                     lotes_linha[field] = self._lote_atual
-                    diag = self._tt_diag[sym]
-                    
+
                     # Só processa quando algum dos 3 campos-chave chega
                     if field not in ('DAT', 'PRE', 'QUL'):
                         continue
@@ -234,29 +232,20 @@ class ProfitRTDAdapter(MarketDataSource):
                     if (lote_ref == 0
                             or lotes_linha.get('PRE', 0) != lote_ref
                             or lotes_linha.get('QUL', 0) != lote_ref):
-                        if field == 'DAT':
-                            diag['dat_received'] += 1
-                            diag['coherence_fail'] += 1
                         continue  # Aguardar convergência — re-avalia no próximo campo
-                    
-                    if field == 'DAT':
-                        diag['dat_received'] += 1
-                    
+
                     # DAT-primário: se esta linha JÁ EMITIU este DAT
                     dat_str = sstr(cell.get('DAT'))
                     chave_linha = (sym, linha, dat_str)
                     if chave_linha in self._vistos_por_linha[sym]:
-                        diag['dat_primary_dup'] += 1
                         continue  # Re-entrega do mesmo trade nesta linha — descartar
                     
                     # Validação de conteúdo
                     pre = fnum(cell.get('PRE'))
                     if pre <= 0:
-                        diag['pre_zero'] += 1
                         continue
                     qtd = fint(cell.get('QUL'))
                     if qtd <= 0:
-                        diag['qtd_zero'] += 1
                         continue
                     
                     # Assinatura determinística do negócio (2ª linha de defesa).
@@ -275,20 +264,17 @@ class ProfitRTDAdapter(MarketDataSource):
                     # histórico acumulado na primeira chamada de RefreshData)
                     if self._baseline_pending[sym]:
                         self._vistos_tt[sym][sig] = True
-                        diag['baseline_absorbed'] += 1
                         continue
 
                     # DEDUP por assinatura (2ª linha de defesa — pega trades
                     # que aparecem em linhas diferentes entre ciclos)
                     if sig in self._vistos_tt[sym]:
-                        diag['sig_dup'] += 1
                         continue  # Duplicata — descartar silenciosamente
                     
                     # Marcar como visto (LRU eviction se exceder limite)
                     vistos = self._vistos_tt[sym]
                     vistos[sig] = True
                     self._tt_recebidos[sym] += 1
-                    self._tt_diag[sym]['tt_emitted'] += 1  # v14.5 diagnostic
                     if len(vistos) > self._dedup_max_per_ativo:
                         vistos.popitem(last=False)
                     
@@ -386,7 +372,6 @@ class ProfitRTDAdapter(MarketDataSource):
                     vistos = self._vistos_tt[sym]
                     vistos[sig] = True
                     self._tt_recebidos[sym] += 1
-                    self._tt_diag[sym]['rlp_emitted'] += 1  # v14.5 diagnostic
                     if len(vistos) > self._dedup_max_per_ativo:
                         vistos.popitem(last=False)
                     
@@ -464,7 +449,6 @@ class ProfitRTDAdapter(MarketDataSource):
             "ativos": list(set(self._tt_map.values())),
             "interface": "COM/RTD",
             "dedup_stats": self._dedup_stats(),
-            "tt_diagnostics": {sym: dict(counts) for sym, counts in self._tt_diag.items()},
             "ordering_stats": self._ordering_detector.get_stats_for_dashboard(),
         }
 
@@ -492,8 +476,6 @@ class ProfitRTDAdapter(MarketDataSource):
         self._vistos_tt = defaultdict(OrderedDict)
         self._vistos_por_linha = defaultdict(OrderedDict)
         self._baseline_pending = defaultdict(lambda: True)
-        # Diagnóstico: contadores por estágio de processamento TT (v14.5)
-        self._tt_diag = defaultdict(lambda: defaultdict(int))
 
 # Re-exporta constantes dos novos módulos
 from adapters.rtd_connection import (
