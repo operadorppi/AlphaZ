@@ -44,7 +44,9 @@ class ProfitRTDAdapter(MarketDataSource):
         self._srv = None
         self._topic_map = {}
         self._book_map = {}
+        self._book_recv_count = defaultdict(int)
         self._tt_map = {}
+        self._rlp_map = {}  # janelas RLP (duplicatas de T&T)
         self._shutdown = False
         # Detector de ordenamento temporal (Fase 3)
         self._ordering_detector = EventOrderingDetector(
@@ -95,10 +97,18 @@ class ProfitRTDAdapter(MarketDataSource):
                         tid, val = _connect(srv, [f"{prefix}{i}", "INFO", "ATV"])
                         v = _normalizar_simbolo(val)
                         if v and v in ativos_alvo:
-                            if kind == "book": self._book_map[i] = v
-                            else: self._tt_map[i] = v
-                    except Exception:
-                        pass
+                            if kind == "book":
+                                self._book_map[i] = v
+                            else:
+                                # v12.5: Janela duplicata = RLP (Registro de Livros e Posicoes)
+                                if v not in self._tt_map.values():
+                                    self._tt_map[i] = v
+                                else:
+                                    # Marcar como RLP para gravacao separada
+                                    self._rlp_map[i] = v
+                                    log.info(f"[RTD] T&T{i} ({v}): mapeado como RLP")
+                    except Exception as e:
+                        log.debug(f"[RTD] Window {i}/{kind.upper()} not available: {e}")
                 self.com_client.PumpEvents(0.01)
 
             # 3. Assinatura de Tópicos
@@ -107,7 +117,8 @@ class ProfitRTDAdapter(MarketDataSource):
             n_book = len(self._topic_map) - n_tt
             log.info(
                 f"[RTD] Conectado. Ativos T&T: {list(set(self._tt_map.values()))} | "
-                f"tópicos: tt={n_tt} book={n_book}"
+                f"tópicos: tt={n_tt} book={n_book} | "
+                f"tt_map: {dict(self._tt_map)} | book_map: {dict(self._book_map)}"
             )
             # Só considera conectado se houver T&T assinado (fonte do trading).
             # Janelas BOOK quebradas não devem derrubar o motor.
@@ -123,7 +134,7 @@ class ProfitRTDAdapter(MarketDataSource):
         # Linhas vêm da seção 'rtd' do config (ex.: 500/500). Assinar mais linhas
         # do que a janela RTD suporta faz o servidor crashar (Access Violation).
         rtd_cfg = self.config.get('rtd') or {}
-        book_linhas = int(rtd_cfg.get('book_linhas', 60))
+        book_linhas = int(rtd_cfg.get('book_linhas', 500))
         tt_linhas = int(rtd_cfg.get('tt_linhas', 1000))
         
         # Assinatura resiliente: cada ConnectData é protegido (o servidor RTD pode
@@ -157,11 +168,30 @@ class ProfitRTDAdapter(MarketDataSource):
             if fail:
                 log.warning(f"[RTD] T&T{j_idx} ({sym}): {ok} ok / {fail} falhas")
 
+        # v12.5: Assinar topicos RLP (janelas duplicadas)
+        for j_idx, sym in self._rlp_map.items():
+            ok = fail = 0
+            for linha in range(tt_linhas):
+                for field in TT_FIELDS:
+                    try:
+                        tid, _ = _connect(self._srv, [f"T&T{j_idx}", field, str(linha)])
+                        self._topic_map[tid] = ("rlp", sym, field, linha)
+                        ok += 1
+                    except Exception:
+                        fail += 1
+            self.com_client.PumpEvents(0.05)
+            if fail:
+                log.warning(f"[RTD] RLP T&T{j_idx} ({sym}): {ok} ok / {fail} falhas")
+            else:
+                log.info(f"[RTD] RLP T&T{j_idx} ({sym}): {ok} topicos assinados")
+
     def disconnect(self) -> None:
         self._shutdown = True
         if self._srv:
-            try: self._srv.ServerTerminate()
-            except: pass
+            try:
+                self._srv.ServerTerminate()
+            except Exception as e:
+                log.warning(f"[RTD] Erro ao desconectar: {e}")
 
     def events(self) -> Iterator[MarketEvent]:
         """Loop de polling transformado em iterador de contratos."""
@@ -266,23 +296,84 @@ class ProfitRTDAdapter(MarketDataSource):
                             received_at_ns=receive_ns,
                             sequence_id=seq_id,
                         )
-                        yield MarketEvent(type='TRADE', payload=trade, timestamp_ms=event_ts_ms, symbol=sym)
+                        # v14: incluir janela_id no MarketEvent
+                        janela_idx = next((k for k, v in self._tt_map.items() if v == sym), 0)
+                        yield MarketEvent(type='TRADE', payload=trade, timestamp_ms=event_ts_ms,
+                                          symbol=sym, janela_id=janela_idx,
+                                          window_name=f'T&T{janela_idx}')
+
+                elif kind == "rlp":
+                    # v12.5: RLP (Registro de Livros e Posicoes) - mesmo fluxo do T&T
+                    # mas com flag separada para gravacao distinta
+                    cell = self._book_cells[sym][linha]
+                    cell[field] = val
+                    
+                    if field == 'DAT':
+                        pre = fnum(cell.get('PRE'))
+                        if pre <= 0: continue
+                        qtd = fint(cell.get('QUL'))
+                        if qtd <= 0: continue
+                        
+                        sig = ('rlp', sstr(cell.get('DAT')), sstr(cell.get('ACP')),
+                               pre, qtd, sstr(cell.get('AVD')),
+                               sstr(cell.get('AGR')),
+                               sstr(cell.get('AGAG')))
+                        
+                        if self._baseline_pending[sym]:
+                            self._vistos_tt[sym][sig] = True
+                            continue
+                        if sig in self._vistos_tt[sym]:
+                            continue
+                        
+                        vistos = self._vistos_tt[sym]
+                        vistos[sig] = True
+                        if len(vistos) > self._dedup_max_per_ativo:
+                            vistos.popitem(last=False)
+                        
+                        dat_str = sstr(cell.get('DAT'))
+                        event_ts_ms = dat_to_epoch_ms(dat_str)
+                        receive_ns = now_ns()
+                        if event_ts_ms <= 0:
+                            event_ts_ms = receive_ns // 1_000_000
+                        
+                        valido, motivo = validate_event_ts(event_ts_ms, receive_ns)
+                        if not valido: continue
+                        
+                        ord_result = self._ordering_detector.check(sym, event_ts_ms, receive_ns)
+                        if ord_result.action == "REJECT": continue
+                        
+                        seq_id = next_sequence_id()
+                        trade = TradeEvent(
+                            symbol=sym, timestamp_ms=event_ts_ms, price=pre,
+                            quantity=qtd,
+                            aggressor="Comprador" if "compr" in sstr(cell.get('AGR')).lower() else "Vendedor",
+                            buyer=sstr(cell.get('ACP')), seller=sstr(cell.get('AVD')),
+                            received_at_ns=receive_ns,
+                            sequence_id=seq_id,
+                        )
+                        # v14: RLP com janela_id
+                        janela_idx = next((k for k, v in self._rlp_map.items() if v == sym), 0)
+                        yield MarketEvent(type='RLP', payload=trade, timestamp_ms=event_ts_ms,
+                                          symbol=sym, janela_id=janela_idx,
+                                          window_name=f'T&T{janela_idx}', is_rlp=True)
 
                 elif kind == "book":
                     self._book_cells[sym][linha][field] = val
+                    self._book_recv_count[sym] = self._book_recv_count.get(sym, 0) + 1
                     
-                    # Throttle: emite snapshot do book a cada 250ms por ativo
+                    # Throttle: emite snapshot do book a cada 100ms por ativo (alinhado com janela ML)
                     agora = time.time()
-                    if agora - self._last_book_yield[sym] > 0.25:
+                    if agora - self._last_book_yield[sym] > 0.10:
                         self._last_book_yield[sym] = agora
                         receive_ns = now_ns()
                         bids, asks = [], []
-                        for l_idx in range(int((self.config.get('rtd') or {}).get('book_linhas', 60))):
+                        for l_idx in range(int((self.config.get('rtd') or {}).get('book_linhas', 500))):
                             c = self._book_cells[sym][l_idx]
                             if c.get('OCP'): bids.append(BookLevel(price=fnum(c['OCP']), volume=fint(c.get('VOC')), broker=sstr(c.get('ACP'))))
                             if c.get('OVD'): asks.append(BookLevel(price=fnum(c['OVD']), volume=fint(c.get('VOV')), broker=sstr(c.get('AVD'))))
                         
                         book_ts = int(agora*1000)
+                        janela_idx = next((k for k, v in self._book_map.items() if v == sym), 0)
                         yield MarketEvent(
                             type='BOOK',
                             payload=BookSnapshot(
@@ -290,7 +381,9 @@ class ProfitRTDAdapter(MarketDataSource):
                                 bids=bids, asks=asks, received_at_ns=receive_ns
                             ),
                             timestamp_ms=book_ts,
-                            symbol=sym
+                            symbol=sym,
+                            janela_id=janela_idx,
+                            window_name=f'BOOK{janela_idx}'
                         )
             
             # Após o primeiro RefreshData bem sucedido, desativa pendência de baseline

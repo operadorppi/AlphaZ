@@ -19,6 +19,7 @@ Compressão: Snappy | Engine: PyArrow
 Jamais sobrescrever dados RAW já gravados.
 """
 import json
+import logging
 import os
 import time
 import threading
@@ -33,6 +34,7 @@ try:
 except ImportError:
     HAS_PYARROW = False
 
+log = logging.getLogger(__name__)
 
 # ========================================================================
 # SCHEMAS EXPLÍTICOS (Seção 10 — tipos consistentes entre arquivos)
@@ -164,7 +166,11 @@ class CapturaEventosMS:
                            use_dictionary=False)
             self._bytes_escrito[key] += out_path.stat().st_size
             self._parte[key] += 1
-        except Exception:
+        except Exception as e:
+            log.error(f"[PARQUET] Flush falhou para {key}: {e} — {len(self._buf.get(key, []))} rows PERDIDOS")
+            # Dados NÃO são descartados: _buf não foi limpo.
+            # Próximo flush tentará novamente. Se continuar falhando,
+            # a queue do daemon enche e eventos são dropped com métrica.
             return
 
         self._buf[key] = []
@@ -440,8 +446,8 @@ class CapturaEventosMS:
                 meta_path.write_text(
                     json.dumps(self._meta, ensure_ascii=False, indent=2),
                     encoding='utf-8')
-            except Exception:
-                pass
+            except Exception as e:
+                log.warning(f"[FILE_STORAGE] Falha ao gravar meta: {e}")
 
 
 # Alias
