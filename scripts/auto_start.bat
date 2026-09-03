@@ -6,26 +6,29 @@ echo ============================================================
 echo.
 
 set "SCRIPT_DIR=%~dp0"
-set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1}"
+rem Remove a barra final (correcao v15.1: nao deixar '}' no path)
+set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1"
 
-:: Task 1: INICIAR MOTOR (8:45)
-schtasks /create /tn "MotorAlphaz_Iniciar" /tr "cmd /c \"cd /d %SCRIPT_DIR% && python watchdog.py WINV26 WDOV26 INDV26 DOLV26\"" /sc weekly /d MON,TUE,WED,THU,FRI /st 08:45 /ru "%USERNAME%" /rl HIGHEST /f
+:: Task 1: INICIAR MOTOR (8:45) — via iniciar_motor.bat (cd para a raiz onde
+::          fica watchdog.py e inicia o watchdog com os 4 ativos)
+schtasks /create /tn "MotorAlphaz_Iniciar" /tr "%SCRIPT_DIR%\iniciar_motor.bat" /sc weekly /d MON,TUE,WED,THU,FRI /st 08:45 /ru "%USERNAME%" /rl HIGHEST /f
 if %errorlevel%==0 (
     echo [OK] MotorAlphaz_Iniciar criada (8:45)
 ) else (
     echo [ERRO] Falha ao criar MotorAlphaz_Iniciar
 )
 
-:: Task 2: PARAR MOTOR (18:30)
-schtasks /create /tn "MotorAlphaz_Parar" /tr "cmd /c \"%SCRIPT_DIR%\parar_motor.bat\"" /sc weekly /d MON,TUE,WED,THU,FRI /st 18:30 /ru "%USERNAME%" /rl HIGHEST /f
+:: Task 2: PARAR MOTOR (18:30) — parar_motor.bat (mata so processos do projeto,
+::          NAO um taskkill /f /im python.exe global)
+schtasks /create /tn "MotorAlphaz_Parar" /tr "%SCRIPT_DIR%\parar_motor.bat" /sc weekly /d MON,TUE,WED,THU,FRI /st 18:30 /ru "%USERNAME%" /rl HIGHEST /f
 if %errorlevel%==0 (
     echo [OK] MotorAlphaz_Parar criada (18:30)
 ) else (
     echo [ERRO] Falha ao criar MotorAlphaz_Parar
 )
 
-:: Task 3: PIPELINE AFTER-MARKET (18:35)
-schtasks /create /tn "MotorAlphaz_Pipeline" /tr "cmd /c \"%SCRIPT_DIR%\pipeline_after_market.bat\"" /sc weekly /d MON,TUE,WED,THU,FRI /st 18:35 /ru "%USERNAME%" /rl HIGHEST /f
+:: Task 3: PIPELINE AFTER-MARKET (18:35) — pipeline_diario completo
+schtasks /create /tn "MotorAlphaz_Pipeline" /tr "%SCRIPT_DIR%\pipeline_after_market.bat" /sc weekly /d MON,TUE,WED,THU,FRI /st 18:35 /ru "%USERNAME%" /rl HIGHEST /f
 if %errorlevel%==0 (
     echo [OK] MotorAlphaz_Pipeline criada (18:35)
 ) else (

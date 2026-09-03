@@ -179,8 +179,57 @@ class ReplayEngine:
             except Exception as e:
                 log.warning(f"[REPLAY] Scorer nao carregou: {e}")
 
+    def _ler_tt_hive(self, pasta_neg, dia_str=None):
+        """v15.1: Le negocios do Parquet Hive (RAW/data_type=TT/date=.../asset=...).
+
+        Mapeia o schema RAW (ts_ns, ativo, preco, quantidade, agressor,
+        compradora, vendedora, is_rlp) para o formato de evento do replay.
+        Linhas RLP sao ignoradas (fluxo duplicado de T&T — evitaria contagem dupla).
+        """
+        try:
+            from adapters.file_storage import find_hive_files
+        except Exception:
+            return []
+        files = find_hive_files(str(pasta_neg), dia_str=dia_str, data_type="TT")
+        if not files:
+            return []
+        import pyarrow.parquet as pq
+        cols = ["ts_ns", "ativo", "preco", "quantidade", "agressor",
+                "compradora", "vendedora", "is_rlp"]
+        eventos = []
+        for f in files:
+            try:
+                tbl = pq.read_table(f, columns=cols)
+            except Exception as e:
+                log.warning(f"[REPLAY] Falha ao ler {f}: {e}")
+                continue
+            for row in tbl.to_pylist():
+                if row.get("is_rlp"):
+                    continue
+                ts_ns = row.get("ts_ns") or 0
+                if not ts_ns:
+                    continue
+                eventos.append({
+                    "_tipo": "NEG",
+                    "ativo": row.get("ativo") or "",
+                    "ts_ms": int(ts_ns // 1_000_000),
+                    "preco": float(row.get("preco") or 0),
+                    "qtd": int(row.get("quantidade") or 0),
+                    "agressor": row.get("agressor") or "",
+                    "compradora": row.get("compradora") or "",
+                    "vendedora": row.get("vendedora") or "",
+                })
+        return eventos
+
     def _carregar_eventos(self, pasta_neg, dia_str=None):
-        """Carrega e ordena eventos de negociacao de 1 dia."""
+        """Carrega e ordena eventos de negociacao de 1 dia.
+
+        v15.1: tenta Parquet Hive primeiro; fallback para JSONL legado.
+        """
+        eventos = self._ler_tt_hive(pasta_neg, dia_str)
+        if eventos:
+            eventos.sort(key=lambda e: e.get("ts_ms", 0))
+            return eventos
         if dia_str:
             neg_files = sorted(Path(pasta_neg).glob(f"raw_negocios_ms_*{dia_str}*.jsonl"))
         else:
@@ -434,9 +483,17 @@ if __name__ == "__main__":
     elif args.modo == "validacao":
         # Descobre os N dias mais recentes com dados
         pasta = Path(args.pasta)
-        all_neg = sorted(pasta.glob("raw_negocios_ms_*.jsonl"))
-        # Extrai datas unicas (formato: raw_negocios_ms_YYYYMMDD_*.jsonl)
         datas = set()
+        # v15.1: dias do Parquet Hive (RAW/data_type=TT/date=YYYYMMDD/)
+        hive_tt = pasta / "RAW" / "data_type=TT"
+        if hive_tt.exists():
+            for d in hive_tt.iterdir():
+                if d.is_dir() and d.name.startswith("date="):
+                    dd = d.name[len("date="):]
+                    if len(dd) == 8 and dd.isdigit() and dd.startswith("20"):
+                        datas.add(dd)
+        # Fallback: JSONL legado (formato: raw_negocios_ms_YYYYMMDD_*.jsonl)
+        all_neg = sorted(pasta.glob("raw_negocios_ms_*.jsonl"))
         for f in all_neg:
             parts = f.stem.split("_")
             for p in parts:

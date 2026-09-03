@@ -124,9 +124,29 @@ class ProfitRTDAdapter(MarketDataSource):
             )
             # Só considera conectado se houver T&T assinado (fonte do trading).
             # Janelas BOOK quebradas não devem derrubar o motor.
-            return n_tt > 0
+            if n_tt > 0:
+                return True
+            # v15.2: sem janelas T&T (Profit fechado / janelas não configuradas) —
+            # retorna False para o App tentar de novo; encerra o servidor criado
+            # para não vazar objetos COM a cada tentativa.
+            log.warning(
+                "[RTD] Nenhuma janela T&T encontrada — Profit aberto? Janelas "
+                "T&T configuradas? O motor vai tentar de novo em 30s."
+            )
+            try:
+                self._srv.ServerTerminate()
+            except Exception:
+                pass
+            self._srv = None
+            return False
         except Exception as e:
             log.error(f"[RTD] Falha na conexão: {e}")
+            try:
+                if self._srv is not None:
+                    self._srv.ServerTerminate()
+            except Exception:
+                pass
+            self._srv = None
             return False
 
     def _assinar_topicos(self):

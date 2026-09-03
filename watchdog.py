@@ -219,22 +219,7 @@ class Watchdog:
             except Exception:
                 log.error(f"Falha ao matar motor PID={pid}")
 
-        self._consolidar_parquets()
         self._fechar_log()
-
-    def _consolidar_parquets(self):
-        """Consolida arquivos .part_*.parquet em arquivos únicos por hora."""
-        try:
-            from adapters.rtd_writer import consolidar_book_parquet, consolidar_tt_parquet
-            from datetime import date
-            pasta = os.path.join(self._script_dir, 'D:\\MarketData\\Profit')
-            dia_str = date.today().strftime('%Y%m%d')
-            log.info(f'[WD] Consolidando Parquets do dia {dia_str}...')
-            n_book = consolidar_book_parquet(pasta, dia_str)
-            n_tt = consolidar_tt_parquet(pasta, dia_str)
-            log.info(f'[WD] Consolidados: {n_book} book + {n_tt} TT')
-        except Exception as e:
-            log.warning(f'[WD] Falha na consolidacao: {e}')
 
     def _fechar_log(self):
         if hasattr(self, '_log_stdout') and self._log_stdout:
@@ -257,13 +242,20 @@ class Watchdog:
         """Verifica se nao excedeu o limite de reinicios.
         v9.35: nao limita reinicios se o watchdog ainda nao viu o motor
         funcionar (primeiros restarts sao normais — RTD pode nao estar pronto).
-        So limita apos o motor ja ter ficado vivo por >5min (Startup grace + margem)."""
+        So limita apos o motor ja ter ficado vivo por >5min (Startup grace + margem).
+
+        v15.2: antes da abertura do pregao o limite NUNCA para o watchdog —
+        a abertura nao tem horario fixo (pode ser 09:01, 09:03...) e o motor
+        pode reiniciar varias vezes ate o Profit/janelas ficarem prontos.
+        O limite so vale durante o pregao (apos 09:15)."""
         agora = datetime.now()
+        hora_min = agora.hour * 60 + agora.minute
+        pre_mercado = hora_min < 9 * 60 + 15  # abertura varia (09:01-09:05+)
         self.reinicios = [t for t in self.reinicios if agora - t < timedelta(hours=1)]
         if len(self.reinicios) >= MAX_RESTARTS_POR_HORA:
-            # Se o motor ja funcionou por >5min alguma vez, o limite vale.
-            # Se nunca funcionou, e o RTD que nao esta pronto — nao limitar.
-            if getattr(self, '_motor_ja_funcionou', False):
+            # Durante o pregao, com motor que ja funcionou, o limite vale.
+            # Antes da abertura (ou se nunca funcionou) — continua tentando.
+            if getattr(self, '_motor_ja_funcionou', False) and not pre_mercado:
                 log.error(
                     f"Maximo de {MAX_RESTARTS_POR_HORA} reinicios/hora atingido "
                     f"(motor ja funcionou antes). PARANDO watchdog."
@@ -272,7 +264,8 @@ class Watchdog:
             else:
                 log.warning(
                     f"Maximo de {MAX_RESTARTS_POR_HORA} reinicios/hora atingido "
-                    f"mas motor ainda nunca funcionou — continuando (RTD pode nao estar pronto)."
+                    f"mas {'pre-mercado' if pre_mercado else 'motor ainda nunca funcionou'} "
+                    f"— continuando (RTD pode nao estar pronto)."
                 )
                 time.sleep(60)
                 return True
@@ -362,13 +355,6 @@ class Watchdog:
                     )
                     tempo_ultimo_log = time.time()
                 
-                # v11.18: Consolidacao periodica (a cada 1h)
-                if not hasattr(self, '_ultimo_consolidar'):
-                    self._ultimo_consolidar = time.time()
-                if time.time() - self._ultimo_consolidar >= 3600:
-                    self._consolidar_parquets()
-                    self._ultimo_consolidar = time.time()
-
             except KeyboardInterrupt:
                 break
             except Exception as e:

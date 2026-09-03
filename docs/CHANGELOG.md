@@ -1,3 +1,85 @@
+## v15.2 — Motor Imortal + Watchdog Pré-Mercado (02/09/2026)
+
+### Problema
+
+O motor morria **antes da abertura do pregão**: `ProfitRTDAdapter.connect()`
+retorna False quando não encontra janelas T&T (Profit fechado, janelas ainda
+não configuradas ou mercado não aberto). `App.run()` fazia `return` nesse caso
+→ processo saía com **exit code 0** silencioso. O watchdog reiniciava em loop
+(30s check + 45s delay = consolidações a cada 75s no log), deixando o motor
+morto ~80% do tempo entre 08:45 e ~09:37. Como a abertura não tem horário fixo
+(09:01, 09:03...), o motor podia estar morto exatamente na abertura — e o
+watchdog podia desistir (limite de reinícios) e nunca mais trazer o motor de volta.
+
+### Correções
+
+1. **`core/app.py` — motor imortal**: `run()` não retorna mais em falha de
+   conexão. Agora o motor fica vivo, mantém capture daemon + dashboard rodando
+   e **tenta reconectar a cada 30s** (configurável via `rtd_reconnect_interval_s`)
+   até o Profit/janelas ficarem prontos. O motor entra em operação no momento
+   em que a abertura real acontece — sem depender de horário fixo.
+2. **`adapters/profit_rtd.py` — sem vazamento de COM**: quando `connect()`
+   falha (sem janelas T&T ou exceção), o servidor RTD criado é encerrado com
+   `ServerTerminate()` antes de retornar False — antes, cada tentativa vazava
+   um servidor COM.
+3. **`watchdog.py` — pré-mercado nunca desiste**: o limite de reinícios
+   (`MAX_RESTARTS_POR_HORA`) só vale durante o pregão (após 09:15). Antes da
+   abertura o watchdog continua reiniciando o motor indefinidamente.
+4. **`watchdog.py` — consolidação removida do ciclo de restart**: `_matar_motor`
+   e o bloco horário chamavam `_consolidar_parquets()` (legado JSONL) em todo
+   restart — era o "Consolidando Parquets" a cada 75s no log. A consolidação
+   pertence ao `pipeline_diario.py` (18:35), não ao watchdog.
+
+### Validação
+
+- Reprodução do bug: `connect()` sem janelas T&T → exit 0 (confirmado).
+- Teste com stub: connect falha 2× e conecta na 3ª → o App retenta e não sai.
+- Suíte completa: **849 passed, 7 skipped, 4 xfailed — 0 falhas**.
+
+## v15.1 — Loop Pós-Pregão Automatizado (02/09/2026)
+
+### Problema
+
+O pipeline noturno existia em partes soltas (`pipeline_after_market.bat` duplicava
+uma sequência parcial), o replay continuava lendo **só JSONL** (captura já era
+Parquet+Hive → replay não encontrava dados), e o modelo treinado não era
+conectado ao motor ao vivo (config.json `ml_modelo` vazio).
+
+### Correções
+
+1. **replay_engine.py agora lê Parquet Hive** (`_ler_tt_hive`): mapeia o schema
+   RAW (`ts_ns → ts_ms`, `quantidade → qtd`, `preco/agressor/compradora/vendedora`)
+   e ignora linhas `is_rlp=True` (fluxo duplicado — evita contagem dupla).
+   Fallback para JSONL legado mantido. A descoberta de dias no modo `validacao`
+   também varre `RAW/data_type=TT/date=*`.
+2. **pipeline_diario.py (v15.1, 8 passos)**:
+   - `[0]` Consolidação RAW Hive (consolidar_hive.py) — a rotina das 18:35 agora
+     está embutida no pipeline;
+   - `[6]` Retreino grava em path estável `save_dir/modelo_lgbm_atual.pkl` e
+     atualiza `config.json → ml_modelo` (motor ao vivo usa o modelo novo após
+     reinício);
+   - `[7]` Replay de validação (`--modo validacao --dias 3`) → grava
+     `replay_resultado.json`, que o gate do motor lê para liberar trading.
+3. **scripts/pipeline_after_market.bat**: passou a chamar `pipeline_diario.py`
+   (ontem, dia útil) com log completo em `D:\MarketData\mimo\pipeline_after_market.log`.
+4. **scripts/auto_start.bat**: corrigido bug de path (`%SCRIPT_DIR:~0,-1}` →
+   `~0,-1`) que deixava um `}` no caminho das tarefas agendadas. Tarefa
+   `MotorAlphaz_Iniciar` agora aponta para `iniciar_motor.bat` (que faz cd para
+   a raiz onde fica o `watchdog.py` — a versão anterior do bat chamaria
+   `python watchdog.py` dentro de `scripts/`, que falharia). A tarefa
+   `MotorAlphaz_Parar` deixou de ser `taskkill /f /im python.exe` (matava todo
+   python da máquina) e passou a usar o `parar_motor.bat` seguro.
+
+   Tarefas instaladas (03/09/2026, via schtasks com elevação):
+   `MotorAlphaz_Iniciar` 08:45 seg-sex, `MotorAlphaz_Parar` 18:30,
+   `MotorAlphaz_Pipeline` 18:35 — todas `HighestAvailable`, dias MON-FRI.
+
+### Validação
+
+- Teste sintético: Hive TT → eventos do replay corretos (RLP ignorado).
+- `pipeline_diario.py --dry-run`: 8 passos alinhados.
+- Suíte completa: **849 passed, 7 skipped, 4 xfailed — 0 falhas**.
+
 ## v14.8 — Separação de Estado por Janela (TT/RLP/BOOK) — Bug Crítico (02/09/2026)
 
 ### Bug corrigido: contaminação cruzada entre janelas do mesmo ativo

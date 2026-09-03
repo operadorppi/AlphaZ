@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-pipeline_diario.py — Pipeline diário completo (v9.11).
+pipeline_diario.py — Pipeline diário completo (v15.1).
 
-Orquestra: relatório → features 100ms → labels → dataset parquet → gate → retreino.
+Orquestra: consolidação Hive → relatório → features 100ms → labels → dataset
+parquet → gate → retreino → replay (go/no-go).
 
 Uso:
   python pipeline_diario.py                    # ontem (dia útil)
@@ -53,7 +54,7 @@ def run(modulo, args_list, log_file, passo, desc, dry_run=False):
     env['PYTHONPATH'] = str(_root) + os.pathsep + str(_root / 'scripts') + os.pathsep + env.get('PYTHONPATH', '')
     
     cmd = [PYTHON, str(modulo_path)] + args_list
-    desc_str = f'[{passo}/7] {desc}'
+    desc_str = f'[{passo}/8] {desc}'
     print(f'\n{desc_str}')
     print(f'  $ {" ".join(cmd)}')
     if dry_run:
@@ -105,16 +106,16 @@ def main():
     if args.dry_run:
         print('MODO: --dry-run (nenhuma execução real)\n')
 
-    # 0. Converter JSONL brutos em Parquet por ativo
-    print(f'\n[0/7] Conversao JSONL -> Parquet ({dia})')
-    if not args.dry_run:
-        run('scripts/converter_brutos_parquet.py', ['--dia', dia, '--save-dir', save_dir],
-            log_file, 0, 'Conversao JSONL -> Parquet', dry_run=args.dry_run)
-    else:
-        print(f'  converter_brutos_parquet.py --dia {dia}')
+    # 0. Consolidar fragmentos Parquet do dia (RAW imutável: cria part-*.parquet
+    #    consolidados lado a lado; nunca sobrescreve os originais)
+    print(f'\n[0/8] Consolidacao RAW Hive ({dia})')
+    raw_root = Path(save_dir) / 'RAW'
+    run('scripts/consolidar_hive.py',
+        ['--dia', dia, '--base-dir', str(raw_root)],
+        log_file, 0, 'Consolidacao RAW Hive', dry_run=args.dry_run)
 
     # 1. Relatório de qualidade
-    print(f'\n[1/7] Relatório de qualidade ({dia})')
+    print(f'\n[1/8] Relatório de qualidade ({dia})')
     if not args.dry_run:
         from relatorio_diario import gerar_relatorio, validar_dia
         # Validação prévia (exit 1 se o dia base estiver com problema)
@@ -134,14 +135,14 @@ def main():
         run('ml/batch_processor.py', ['--periodo', periodo, '--ativo', ','.join(ATIVOS)],
             log_file, 2, 'Features 100ms (batch_processor)', dry_run=args.dry_run)
     else:
-        print(f'\n[2/7] Features 100ms — pulado (--skip-batch)')
+        print(f'\n[2/8] Features 100ms — pulado (--skip-batch)')
 
     # 3. Labels — v9.13: usa labeler_VECTORIZADO (o labeler.py tinha o bug do
     # purge rearmado a cada linha neutra, gerando parquets ~100% neutros).
     if not args.skip_batch:
         feat_path = Path(save_dir) / feat_file
         if not args.dry_run and (not feat_path.exists() or feat_path.stat().st_size == 0):
-            print(f'\n[3/7] Features vazias/ausentes: {feat_path}')
+            print(f'\n[3/8] Features vazias/ausentes: {feat_path}')
             print('  (nada para rotular — o pipeline abortado para não gerar parquet vazio)')
             sys.exit(3)
         run('ml/labeler_vectorizado.py',
@@ -149,7 +150,7 @@ def main():
              '--tp', '100', '--sl', '50', '--max-holding', '30', '--purge', '10'],
             log_file, 3, 'Labels (labeler_vectorizado)', dry_run=args.dry_run)
     else:
-        print(f'\n[3/7] Labels — pulado (--skip-batch)')
+        print(f'\n[3/8] Labels — pulado (--skip-batch)')
 
     # 4. Dataset final (parquet)
     if not args.skip_batch:
@@ -160,7 +161,7 @@ def main():
              '--output', out_parquet],
             log_file, 4, 'Dataset final (dataset_builder)', dry_run=args.dry_run)
     else:
-        print(f'\n[4/7] Dataset final — pulado (--skip-batch)')
+        print(f'\n[4/8] Dataset final — pulado (--skip-batch)')
 
     # 4.5 (v9.32) Integração das camadas de contexto (ajuste oficial B3 + VWAP
     # intraday + features de regime + interações micro x contexto).
@@ -172,10 +173,10 @@ def main():
                 ['--mes', mes_str, '--ativo'] + ATIVOS,
                 log_file, 4.5, 'Integrar contexto avançado (v9.32)', dry_run=args.dry_run)
     else:
-        print(f'\n[4.5/7] Integrar contexto — pulado (--skip-batch)')
+        print(f'\n[4.5/8] Integrar contexto — pulado (--skip-batch)')
 
     # 5. Gate de dados — Dias úteis do mês até hoje (protege o parquet)
-    print(f'\n[5/7] Gate de qualidade')
+    print(f'\n[5/8] Gate de qualidade')
     from relatorio_diario import ultimos_dias_uteis
     from glob import glob
     # Só validar dias que REALMENTE têm dados brutos
@@ -257,17 +258,56 @@ def main():
         print(f'  retreinar_lgbm_limpo.gate_qualidade({save_dir}, {dias_gate})')
 
     # 6. Retreino
-    print(f'\n[6/7] Retreino do modelo')
+    print(f'\n[6/8] Retreino do modelo')
     # v9.32: usar dataset enriquecido (com VWAP, ajuste, regime) se existir
-    retrain_args = ['--gate-dias', ','.join(dias_gate), '--save-dir', save_dir, '--ativo', ATIVO]
+    # v15.1: saída em path estável (save_dir/modelo_lgbm_atual.pkl) e o mesmo
+    #        path é gravado em config.json (ml_modelo) para o motor ao vivo
+    #        usar o modelo novo após reinício.
+    modelo_out = str(Path(save_dir) / 'modelo_lgbm_atual.pkl')
+    retrain_args = ['--gate-dias', ','.join(dias_gate), '--save-dir', save_dir,
+                    '--ativo', ATIVO, '--modelo-out', modelo_out]
     run('ml/retreinar_lgbm_limpo.py',
         retrain_args,
         log_file, 6, 'Retreino (retreinar_lgbm_limpo)', dry_run=args.dry_run)
+    if not args.dry_run and Path(modelo_out).exists():
+        _atualizar_ml_modelo_config(modelo_out)
+
+    # 7. Replay de validação (go/no-go) — alimenta replay_resultado.json, que o
+    #    core/app.py (_verificar_replay_gate) lê para liberar/segurar trading.
+    print(f'\n[7/8] Replay de validacao (go/no-go)')
+    if Path(modelo_out).exists() or args.dry_run:
+        run('replay_engine.py',
+            ['--modo', 'validacao', '--pasta', save_dir, '--modelo', modelo_out,
+             '--dias', '3', '--ativo', ATIVO],
+            log_file, 7, 'Replay validacao (replay_engine)', dry_run=args.dry_run)
+    else:
+        print(f'  Modelo não encontrado: {modelo_out} — pulando replay')
+        if not args.dry_run:
+            print('  [AVISO] Sem replay: o gate do motor seguirá em CAPTURA PURA.')
 
     print(f'\n{"="*60}')
     print(f'Pipeline {dia} concluído com sucesso!')
     print(f'Log: {log_file}')
     print(f'{"="*60}')
+
+
+def _atualizar_ml_modelo_config(modelo_path):
+    """Grava o modelo treinado em config.json (chave ml_modelo).
+
+    O motor ao vivo carrega ml_modelo do config.json na inicialização.
+    Atualização guardada: só escreve se o arquivo existir e a leitura for válida.
+    """
+    import json as _json
+    cfg_path = Path(__file__).resolve().parent.parent / 'config.json'
+    try:
+        with open(cfg_path, encoding='utf-8') as f:
+            cfg = _json.load(f)
+        cfg['ml_modelo'] = modelo_path
+        with open(cfg_path, 'w', encoding='utf-8') as f:
+            _json.dump(cfg, f, ensure_ascii=False, indent=2)
+        print(f'  [ML_MODELO] config.json atualizado -> {modelo_path}')
+    except Exception as e:
+        print(f'  [ML_MODELO] AVISO: não consegui atualizar config.json: {e}')
 
 
 if __name__ == '__main__':

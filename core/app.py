@@ -311,12 +311,28 @@ class App:
         self.capture_daemon.start()
         log.info('[APP] Capture daemon iniciado')
 
-        if not self.data_source.connect():
-            log.error("[APP] Falha ao conectar à fonte de dados.")
+        # v15.2: MOTOR IMORTAL — nunca sai do processo por falha de conexão.
+        # Antes do pregão o Profit pode estar fechado ou as janelas T&T ainda
+        # não mapeadas: connect() retorna False e o motor morria (exit 0),
+        # obrigando o watchdog a reiniciar em loop até o mercado abrir
+        # (a abertura varia — pode ser 09:01 ou 09:03+). Agora o motor fica
+        # vivo e tenta reconectar a cada 30s até o Profit/janelas ficarem prontos.
+        self.dashboard.start()
+        retry_s = float(self.config.get('rtd_reconnect_interval_s', 30))
+        while not self._shutdown.is_set():
+            if self.data_source.connect():
+                break
+            log.error(
+                f'[APP] Falha ao conectar à fonte de dados — nova tentativa em {retry_s:.0f}s '
+                '(Profit aberto? Janelas T&T configuradas?)'
+            )
+            self._shutdown.wait(retry_s)
+
+        if self._shutdown.is_set():
+            log.info('[APP] Shutdown durante retry de conexão')
             self.capture_daemon.stop()
             return
-
-        self.dashboard.start()
+        self._conexao_ok = True
 
         self._loop()
 
