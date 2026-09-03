@@ -92,21 +92,23 @@ D:\MarketData\Profit\RAW\
 python -c "import py_compile; py_compile.compile('core/app.py', doraise=True)"
 
 # Testes
-python -m pytest tests/ testes/ -q --ignore=testes/test_book_split_edge_cases.py --ignore=testes/test_config_flat.py --ignore=testes/test_risk_unification.py
+python -m pytest tests/ testes/ -q
 
-# Resultado: 782 passed, 28 pre-existing failures
+# Resultado: 849 passed, 7 skipped, 4 xfailed (0 falhas)
 ```
 
-## Falhas Restantes (28, pre-existing)
+## Falhas Resolvidas (28, v14.8)
 
-| Categoria | Count | Causa |
-|-----------|-------|-------|
-| test_risk_unification | 9 | Testes rodam à meia-noite → FORA_HORARIO bloqueia |
-| test_book_split | 9 | config.CONFIG é None (legacy não inicializado) |
-| test_config_flat | 5 | _aplicar_valor_config removido no refactor |
-| test_features | 3 | Testes esperam JSONL, v14 usa Parquet Hive |
-| test_edge_case_scorer | 1 | Mock setup incompleto |
-| test_capture_overflow | 1 | Drain behavior mudou no v14 |
+As 28 falhas pré-existentes foram todas corrigidas:
+
+| Categoria | Count | Correção |
+|-----------|-------|----------|
+| test_risk_unification | 10 | `make_config` com sessão 00:00-23:59 (testes não dependem da hora do dia) |
+| test_book_split | 9 | `config.CONFIG` agora é dict real (era None); `MarketState()` lê CONFIG como fallback |
+| test_config_flat | 5 | Reescrito para a API atual (`load_config` + `Config.extra`), mantendo o objetivo R3 |
+| test_features | 3 | Timestamps epoch ms (ms-do-dia era rejeitado); rotação validada via Parquet Hive |
+| test_edge_case_scorer | 1 | `App(config=...)` injeta config (App() lê config.json da raiz, não o temporário) |
+| test_capture_overflow | 1 | Drain validado via Parquet Hive com timestamps epoch ms |
 
 ## Próximos Passos
 
@@ -114,4 +116,4 @@ python -m pytest tests/ testes/ -q --ignore=testes/test_book_split_edge_cases.py
 2. **Retreinar modelo** com dados Hive limpos
 3. **Ativar replay gate** (require_replay_validated: true) quando replay aprovar
 4. **Integrar observability/** ao motor
-5. **Corrigir 28 testes restantes** (mock horário, config legacy)
+5. **Rodar motor** para aplicar o fix de separação de janelas (v14.8)

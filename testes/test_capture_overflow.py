@@ -350,11 +350,11 @@ class TestDrainShutdown:
         d.start()
 
         # Enfileirar 1 lote com 250 trades
-        # tms = time-of-day em ms (formato que o FileStorage espera)
-        from datetime import datetime
-        dt = datetime.now()
-        tod = (dt.hour * 3600 + dt.minute * 60 + dt.second) * 1000
-        trades = [('WINV26', tod+i, 177500, 10, 'Comprador', 'BTG', 'XP')
+        # v14.8: timestamp em epoch ms (ms-do-dia era rejeitado como antigo
+        # pela validação de 300s do FileStorage) e verificação via Parquet
+        # Hive (v14 substituiu o JSONL).
+        agora_ms = int(time.time() * 1000)
+        trades = [('WINV26', agora_ms+i, 177500, 10, 'Comprador', 'BTG', 'XP')
                   for i in range(250)]
         d.registrar_negocios(trades)
 
@@ -364,20 +364,19 @@ class TestDrainShutdown:
         # Parar — drain deve gravar tudo
         d.stop()
 
-        # Verificar que os arquivos JSONL foram criados
+        # Verificar que os Parquets Hive foram criados
         import glob
-        files = glob.glob(os.path.join(tmp_dir, 'raw_negocios_ms_test_drain*.jsonl'))
+        files = glob.glob(os.path.join(tmp_dir, 'RAW', 'data_type=TT', 'date=*',
+                                      'asset=WIN', '*.parquet'))
         assert len(files) > 0, "Deveria ter criado arquivo de negócios"
 
-        # Verificar que os eventos foram gravados
-        total_lines = 0
+        # Verificar que os eventos foram gravados (contar rows via metadata)
+        import pyarrow.parquet as pq
+        total_rows = 0
         for f in files:
-            with open(f, encoding='utf-8') as fh:
-                for line in fh:
-                    if line.strip():
-                        total_lines += 1
+            total_rows += pq.read_metadata(f).num_rows
 
-        assert total_lines > 0, "Deveria ter gravado eventos no drain"
+        assert total_rows > 0, "Deveria ter gravado eventos no drain"
 
     def test_drain_com_fila_parcial(self, tmp_dir):
         """Drain grava mesmo se a fila foi parcialmente processada."""

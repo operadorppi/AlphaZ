@@ -68,7 +68,11 @@ def get_config_dict():
     return _legacy_config
 
 # Exportar para compatibilidade legado
-CONFIG = None  # Será definido dinamicamente
+# v14.8: CONFIG nunca deve ser None — era None e qualquer módulo que lia
+# `config.CONFIG['...']` (ex: testes de book_split, labeler) quebrava com
+# 'NoneType' object is not subscriptable. Agora é um dict real carregado
+# do config.json (mesma fonte do App via get_config_dict).
+CONFIG = get_config_dict()  # dict legado (chaves do config.json + defaults)
 SAVE_DIR = r'D:\MarketData\mimo'
 ATIVO_PRINCIPAL = 'WINV26'
 ATIVO_CONTEXTO = 'WDOV26'

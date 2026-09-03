@@ -67,7 +67,15 @@ class MarketState:
 
     def __init__(self, config=None, base_dir=None, padroes=None):
         self._lock = threading.RLock()
-        self.config = config or {}
+        # v14.8: fallback para o CONFIG legado quando nenhum config é passado
+        # (mesma resolução do App: getattr(CONFIG) -> get_config_dict).
+        if config is None:
+            try:
+                import config as _cfg_mod
+                config = getattr(_cfg_mod, 'CONFIG', None) or {}
+            except Exception:
+                config = {}
+        self.config = config
         self.base_dir = base_dir or self.config.get('save_dir')
         self.market_state = self
 

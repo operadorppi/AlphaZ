@@ -5,116 +5,113 @@ for _d in [_base, os.path.join(_base, "ml"), os.path.join(_base, "scripts")]:
 """
 test_config_flat.py — Testes R3: config.json é aplicado de verdade (flat + aninhado)
 
-ANTES: `_carregar_config_externa` lia apenas um subconjunto de seções aninhadas
-(web, ativos, rtd, trading, circuit_breaker, save_dir). Dezenas de chaves flat
-(cooldown_entre_trades_s, percentil_*, faixas_preco, estrategias, horario_*,
-cb_*, aprendizado_*...) eram IGNORADAS silenciosamente — editar config.json não
-tinha efeito. Seções 'horarios' e 'aprendizado' também eram ignoradas.
+v14.8: o refactor da FASE 10 substituiu a API antiga (_aplicar_valor_config,
+_aplicar_chaves_flat, _aplicar_config_externa, ConfigCompleto()) pelo loader
+único (config/loader.py). Estes testes validam o MESMO objetivo com a API
+atual:
 
-DEPOIS: todas as chaves flat com atributo correspondente são aplicadas
-(com conversão de tipo), e os mappings aninhados continuam prevalecendo em
-conflito — preservando o comportamento efetivo atual.
+  - load_config() resolve P1(overrides) > P2(environments[ENV]) > P3(raiz) > P4(defaults)
+  - Chaves operacionais (ativos, rtd, tick_values, ...) vão para Config.extra
+  - Chaves desconhecidas NÃO são descartadas silenciosamente (ficam em extra)
+  - Chaves proibidas (FORBIDDEN_KEYS) geram ConfigError
+  - bools e números são estritos (sem coerção silenciosa)
 """
 import sys
 import os
 import json
+from decimal import Decimal
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import pytest
 import config as cfg_mod
-
-# chaves flat que têm override aninhado (mappings existentes) — o aninhado
-# prevalece por design; excluídas do teste de paridade direta
-CHAVES_COM_OVERRIDE_ANINHADO = {
-    'web_host', 'web_port', 'ativos', 'book_linhas', 'tt_linhas',
-    'max_trades_dia', 'max_drawdown_dia_pontos', 'tempo_max_posicao_s',
-    'custos_execucao_pontos',
-    'cb_nivel1_perdas', 'cb_nivel1_pnl', 'cb_nivel2_perdas', 'cb_nivel2_pnl',
-    'cb_nivel3_perdas', 'cb_nivel3_pnl',
-    'save_dir',
-    'horario_abertura_fim', 'horario_almoco_inicio', 'horario_almoco_fim',
-    'horario_fechamento',
-    'aprendizado_delta', 'aprendizado_decay', 'aprendizado_min_amostras',
-}
+from config.errors import ConfigError
 
 
-class TestAplicarValorConfig:
-    """Conversão de tipo do valor JSON para o tipo do atributo."""
+class TestValidacaoEstrita:
+    """Validação de tipos no loader (substitui _aplicar_valor_config)."""
 
-    def test_converte_tipos(self):
-        assert cfg_mod._aplicar_valor_config(45, 99) == 99          # int
-        assert cfg_mod._aplicar_valor_config(0.75, 0.9) == 0.9      # float
-        assert cfg_mod._aplicar_valor_config((10, 0), [9, 30]) == (9, 30)  # list -> tuple
-        assert cfg_mod._aplicar_valor_config(True, False) is False  # bool
-        assert cfg_mod._aplicar_valor_config(True, 'x') is True     # bool nunca vira True por string
-        assert cfg_mod._aplicar_valor_config({}, {'WIN': [1, 2]}) == {'WIN': [1, 2]}  # dict
+    def test_bool_estrito(self):
+        assert cfg_mod.loader._strict_bool(True, 'x') is True
+        assert cfg_mod.loader._strict_bool(False, 'x') is False
+
+    def test_bool_rejeita_coercao(self):
+        # bool nunca vira True por número/string (divergência silenciosa é erro)
+        for bad in (1, 0, 'true', 'false', '1', 0.0):
+            with pytest.raises(ConfigError):
+                cfg_mod.loader._strict_bool(bad, 'x')
+
+    def test_decimal_estrito(self):
+        d = cfg_mod.loader._to_decimal('0.02', 'x')
+        assert d == Decimal('0.02')
+        assert isinstance(d, Decimal)
+
+    def test_decimal_rejeita_bool(self):
+        with pytest.raises(ConfigError):
+            cfg_mod.loader._to_decimal(True, 'x')
 
 
 class TestAplicarChavesFlat:
-    """R3: chaves flat são aplicadas; inexistentes são ignoradas."""
+    """R3: chaves flat são aplicadas; desconhecidas vão para extra (não somem)."""
 
-    def test_aplica_apenas_atributos_existentes(self):
-        cfg_obj = cfg_mod.ConfigCompleto()
-        cfg_mod._aplicar_chaves_flat({
-            'cooldown_entre_trades_s': 99,
-            'max_perdas_consecutivas': 7,
-            'horario_abertura_fim': [9, 0],
-            'faixas_preco': {'WIN': [1, 2]},
+    def test_chaves_operacionais_vao_para_extra(self):
+        """Chaves operacionais (ativos, rtd, ...) ficam acessíveis via extra."""
+        cfg = cfg_mod.load_config(overrides={
+            'ativos': ['WINV26', 'WDOV26'],
+            'rtd': {'book_linhas': 500},
             'chave_inexistente': 123,
-        }, cfg_obj)
+        })
+        assert cfg.extra['ativos'] == ['WINV26', 'WDOV26']
+        assert cfg.extra['rtd'] == {'book_linhas': 500}
+        # Desconhecidas NÃO são descartadas silenciosamente — ficam em extra
+        assert cfg.extra['chave_inexistente'] == 123
+        # Acesso dict-like também funciona
+        assert cfg['ativos'] == ['WINV26', 'WDOV26']
 
-        assert cfg_obj.cooldown_entre_trades_s == 99
-        assert cfg_obj.max_perdas_consecutivas == 7
-        assert cfg_obj.horario_abertura_fim == (9, 0)
-        assert cfg_obj.faixas_preco == {'WIN': [1, 2]}
-        assert not hasattr(cfg_obj, 'chave_inexistente')
+    def test_chaves_proibidas_geram_erro(self):
+        """FORBIDDEN_KEYS (conceitos eliminados) geram ConfigError explícito."""
+        with pytest.raises(ConfigError):
+            cfg_mod.load_config(overrides={'exposure_atual': 100})
 
-    def test_secoes_aninhadas_horarios_e_aprendizado(self):
-        """R3: seções 'horarios' e 'aprendizado' antes ignoradas agora valem."""
-        cfg_obj = cfg_mod.ConfigCompleto()
-        cfg_mod._aplicar_config_externa({
-            'horarios': {'abertura_fim': [9, 30], 'fechamento': [17, 45]},
-            'aprendizado': {'delta': 0.05, 'min_amostras': 10},
-        }, cfg_obj)
+    def test_legado_renomeado_e_registrado(self):
+        """Chave legada (exigir_replay) é renomeada e registrada em legacy_used."""
+        cfg = cfg_mod.load_config(overrides={'exigir_replay': True})
+        assert cfg.require_replay_validated is True
+        assert 'exigir_replay' in cfg.legacy_used
 
-        assert cfg_obj.horario_abertura_fim == (9, 30)
-        assert cfg_obj.horario_fechamento == (17, 45)
-        assert cfg_obj.aprendizado_delta == 0.05
-        assert cfg_obj.aprendizado_min_amostras == 10
-
-    def test_aninhado_prevalece_sobre_flat(self):
-        """Comportamento efetivo atual preservado: trading.max_drawdown_dia=-300
-        prevalece sobre a chave flat -500 (ordem: flat primeiro, aninhado depois)."""
-        cfg_obj = cfg_mod.ConfigCompleto()
-        cfg_mod._aplicar_config_externa({
-            'max_drawdown_dia_pontos': -500.0,
-            'trading': {'max_drawdown_dia': -300},
-        }, cfg_obj)
-        assert cfg_obj.max_drawdown_dia_pontos == -300
+    def test_override_prevalece_sobre_json(self):
+        """P1 (overrides) prevalece sobre P3 (config.json raiz)."""
+        cfg = cfg_mod.load_config(overrides={'max_drawdown_dia': 0.01})
+        assert cfg.max_drawdown_dia == Decimal('0.01')
 
     def test_paridade_config_json_real(self):
-        """Para cada chave flat escalar do config.json (sem override aninhado),
-        o ConfigCompleto efetivo reflete o valor do JSON."""
-        cfg_path = os.path.join(os.path.dirname(cfg_mod.__file__), 'config.json')
+        """Para cada chave operacional do config.json, o Config efetivo reflete
+        o valor do JSON (via extra). Chaves gate resolvem nos campos."""
+        cfg_path = os.path.join(_base, 'config.json')
         with open(cfg_path, 'r', encoding='utf-8') as f:
             ext = json.load(f)
 
-        cfg_obj = cfg_mod.ConfigCompleto()
-        cfg_mod._aplicar_config_externa(ext, cfg_obj)
+        cfg = cfg_mod.load_config(path=cfg_path)
 
+        # Chaves gate resolvem em campos
+        assert cfg.environment == ext.get('environment', 'DEVELOPMENT')
+        assert cfg.ml_required == ext.get('ml_required', False)
+        assert cfg.fallback_enabled == ext.get('fallback_enabled', True)
+        assert cfg.require_replay_validated == ext.get('require_replay_validated', False)
+        assert cfg.label == ext.get('label', '')
+
+        # Chaves operacionais ficam em extra — paridade direta
         verificadas = 0
         for chave, valor in ext.items():
-            if chave in CHAVES_COM_OVERRIDE_ANINHADO:
+            if chave in ('environment', 'ml_required', 'fallback_enabled',
+                         'require_replay_validated', 'max_drawdown_dia', 'label'):
                 continue
-            if not hasattr(cfg_obj, chave):
-                continue
-            atual = getattr(cfg_obj, chave)
-            esperado = cfg_mod._aplicar_valor_config(atual, valor)
-            assert atual == esperado, (
-                f"chave flat '{chave}' ignorada pelo loader (R3): "
-                f"efetivo={atual!r} config.json={valor!r}"
+            assert cfg.extra.get(chave) == valor, (
+                f"chave operacional '{chave}' divergiu: extra={cfg.extra.get(chave)!r} "
+                f"config.json={valor!r}"
             )
             verificadas += 1
 
         assert verificadas >= 5, (
-            f"Poucas chaves flat verificadas ({verificadas}) — config.json mudou?"
+            f"Poucas chaves operacionais verificadas ({verificadas}) — config.json mudou?"
         )

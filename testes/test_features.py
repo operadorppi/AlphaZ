@@ -642,7 +642,9 @@ class TestCapturaDedup:
 
     def test_dedup_aceita_duplicatas(self):
         # B5: dedup removido em v9.22 — RTD nunca envia duplicado
-        from captura_eventos_ms import CapturaEventosMS
+        # captura_eventos_ms.py foi movido para a camada adapters na
+        # refatoracao v10.1: adapters/file_storage.py (alias FileStorage).
+        from adapters.file_storage import CapturaEventosMS
         base = os.path.dirname(os.path.abspath(__file__))
         sess = f'TESTE_DUP_{int(time.time() * 1000)}'
         try:
@@ -663,30 +665,37 @@ class TestCapturaDedup:
 
 class TestCapturaRotacao:
     def test_rotacao_por_tamanho(self):
-        # v9.9: arquivo vira em partes (_p01, _p02...) ao passar o limite
-        from captura_eventos_ms import CapturaEventosMS
+        # v14.8: gravação é Parquet+Hive (v14 substituiu o JSONL). A "rotação"
+        # agora gera múltiplos fragmentos part-*.parquet na partição quando
+        # flush_a_cada é pequeno. Timestamps em epoch ms (ms-do-dia era
+        # rejeitado como antigo pela validação de 300s).
+        from adapters.file_storage import CapturaEventosMS
+        import pyarrow.parquet as pq
         base = os.path.dirname(os.path.abspath(__file__))
         sess = f'TESTE_ROT_{int(time.time() * 1000)}'
         try:
-            cap = CapturaEventosMS(base, session_ts=sess, flush_a_cada=1,
-                                   max_bytes_por_arquivo=250)
-            tod = _tod_agora()
+            cap = CapturaEventosMS(base, session_ts=sess, flush_a_cada=1)
+            agora_ms = int(time.time() * 1000)
             for i in range(8):
-                cap.registrar_negocios([('WINV26', tod + i, 174000.0, 10,
+                cap.registrar_negocios([('WINV26', agora_ms + i, 174000.0, 10,
                                          'Comprador', 'XP', 'BTG')])
             cap.fechar()
-            arquivos = sorted(f for f in os.listdir(base)
-                              if f.startswith(f'raw_negocios_ms_{sess}'))
+            from datetime import date as _date
+            hive_dir = os.path.join(base, 'RAW', 'data_type=TT',
+                                    f'date={_date.today().strftime("%Y%m%d")}',
+                                    'asset=WIN')
+            arquivos = sorted(f for f in os.listdir(hive_dir)
+                              if f.startswith('part-') and f.endswith('.parquet'))
             assert len(arquivos) >= 2, f"rotação não aconteceu: {arquivos}"
-            total_linhas = 0
-            for arq in arquivos:
-                with open(os.path.join(base, arq), encoding='utf-8') as fh:
-                    total_linhas += sum(1 for _ in fh)
+            total_linhas = sum(
+                pq.read_metadata(os.path.join(hive_dir, arq)).num_rows
+                for arq in arquivos)
             assert total_linhas == 8, f"total de linhas {total_linhas}"
         finally:
+            import shutil
+            shutil.rmtree(os.path.join(base, 'RAW'), ignore_errors=True)
             for f in os.listdir(base):
-                if (f.startswith(f'raw_negocios_ms_{sess}') or f.startswith(f'raw_book_ms_{sess}')
-                        or f.startswith(f'raw_meta_{sess}')):
+                if f.startswith(f'raw_meta_{sess}'):
                     try:
                         os.remove(os.path.join(base, f))
                     except OSError:
@@ -696,15 +705,17 @@ class TestCapturaRotacao:
 class TestCapturaMeta:
     def test_meta_sessao(self):
         # v9.10: fechar() grava raw_meta_<session>.json com contagens
-        from captura_eventos_ms import CapturaEventosMS
+        # v14.8: timestamps em epoch ms (ms-do-dia era rejeitado como antigo
+        # pela validação de 300s do FileStorage).
+        from adapters.file_storage import CapturaEventosMS
         base = os.path.dirname(os.path.abspath(__file__))
         sess = f'TESTE_META_{int(time.time() * 1000)}'
         try:
             cap = CapturaEventosMS(base, session_ts=sess, flush_a_cada=1)
-            tod = _tod_agora()
-            cap.registrar_negocios([('WINV26', tod, 174000.0, 10, 'Comprador', 'XP', 'BTG')])
-            cap.registrar_negocios([('WDOU26', tod + 1, 5200.5, 5, 'Vendedor', '', 'BTG')])
-            cap.registrar_book('WINV26', tod, {}, 10, 5)
+            agora_ms = int(time.time() * 1000)
+            cap.registrar_negocios([('WINV26', agora_ms, 174000.0, 10, 'Comprador', 'XP', 'BTG')])
+            cap.registrar_negocios([('WDOU26', agora_ms + 1, 5200.5, 5, 'Vendedor', '', 'BTG')])
+            cap.registrar_book('WINV26', agora_ms, {}, 10, 5)
             cap.fechar()
             meta_path = os.path.join(base, f'raw_meta_{sess}.json')
             assert os.path.exists(meta_path), "meta não foi gravado"
@@ -715,6 +726,8 @@ class TestCapturaMeta:
             assert meta['book_snapshots'] == 1, meta
             assert meta['fim_epoch_ms'] is not None, meta
         finally:
+            import shutil
+            shutil.rmtree(os.path.join(base, 'RAW'), ignore_errors=True)
             for f in os.listdir(base):
                 if (f.startswith(f'raw_meta_{sess}') or f.startswith(f'raw_negocios_ms_{sess}')
                         or f.startswith(f'raw_book_ms_{sess}')):
@@ -765,7 +778,8 @@ class TestValidarDia:
                                          'ativo': 'WINV26', 'preco': 174000.0,
                                          'qtd': 5, 'agressor': 'Comprador'}) + '\n')
             info = validar_dia(base, data)
-            assert any('poucos negócios' in p for p in info['problemas']), info['problemas']
+            # v14.8: mensagem do validar_dia é 'poucos negocios' (sem acento)
+            assert any('poucos negocios' in p for p in info['problemas']), info['problemas']
         finally:
             try:
                 os.remove(arquivo)

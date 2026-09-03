@@ -249,16 +249,10 @@ class TestScorerEdgeCases(unittest.TestCase):
             mock_scorer_class.return_value = mock_scorer_instance
             
             # Configurar caminho do modelo existente
-            self.base_config['ml_modelo'] = "/fake/path/modelo.pkl"
-            
-            with open(self.config_path, 'w') as f:
-                json.dump(self.base_config, f)
-            
-            import importlib
-            importlib.reload(config)
-            
-            # Criar o app
-            app = App()
+            # v14.8: App(config=...) injeta o config diretamente — o App()
+            # sem argumentos lê o config.json da raiz (ml_modelo='') e o
+            # arquivo temporário do teste nunca é lido.
+            app = App(config={'ml_modelo': '/fake/path/modelo.pkl'})
             
             # Verificar que tentou carregar o scorer
             mock_util.spec_from_file_location.assert_called()
