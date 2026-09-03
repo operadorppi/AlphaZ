@@ -1,5 +1,13 @@
 # Sistema de Exposição Financeira + Gates
 
+[![CI](https://github.com/operadorppi/AlphaZ/actions/workflows/ci.yml/badge.svg)](https://github.com/operadorppi/AlphaZ/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-849%20passed-green)](https://github.com/operadorppi/AlphaZ/actions/workflows/ci.yml)
+
+> **CI (FASE 17):** lint (flake8 F/E9) · typecheck (mypy) · suíte completa ·
+> leakage (FASE 7) · determinismo · build + validação de artefato.
+> O badge de status só renderiza para quem tem acesso ao repositório
+> (repo privado); fica visível publicamente se o repo for aberto.
+
 ## Instalação
 
 ```bash
@@ -39,7 +47,12 @@ pytest tests/test_mlgate.py -v
 pytest tests/test_replaygate.py -v
 ```
 
-**Suíte atual:** 205 testes passando (FASES 7-15).
+**Suíte atual:** 849 testes passando, 0 falhas (FASES 7-20 + captura v14).
+
+```bash
+# Suíte completa do motor (captura, features, ML, risco, leakage, determinismo)
+python -m pytest tests/ testes/ -q --no-header -p no:cacheprovider
+```
 
 ## Execução
 
