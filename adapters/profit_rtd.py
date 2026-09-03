@@ -55,12 +55,33 @@ class ProfitRTDAdapter(MarketDataSource):
             backward_sequence_threshold=100,
         )
         self._tt_recebidos = defaultdict(int)  # (sym) -> total trades received (running counter)
+        # v15.33: dedup de reemissoes persistentes da janela T&T/RLP com
+        # identidade COMPLETA (ts + preco + qtd + agressor + compradora +
+        # vendedora). Medicao 2026-09-03: o RTD reentrega as linhas visiveis a
+        # cada RefreshData e 76-98% das linhas gravadas eram reemissoes — cada
+        # trade real deve ser emitido 1x. Trades genuinamente distintos nunca
+        # colidem (qualquer campo diferente = evento novo). Trades identicos
+        # campo-a-campo no mesmo milissegundo sao indistinguiveis na fonte e
+        # sao colapsados — limitacao documentada (rajadas de mesma identidade).
+        rtd_cfg = self.config.get('rtd') or {}
+        self._dedup_tt_on = bool(rtd_cfg.get('dedup_tt', True))
+        self._dedup_tt_expiry_s = float(rtd_cfg.get('dedup_tt_expiry_s', 900))
+        self._dedup_tt_max = int(rtd_cfg.get('dedup_tt_max_por_ativo', 200_000))
+        self._vistos_tt = defaultdict(OrderedDict)  # (sym, kind) -> OrderedDict{sig: receive_ns}
+        self._tt_unicos = defaultdict(int)          # (sym, kind) -> emitidos unicos
+        self._tt_duplicados = defaultdict(int)      # (sym, kind) -> reemissoes suprimidas
         self._baseline_pending = defaultdict(lambda: True)
         self._connect_ts_ms = 0  # início da captura (wall clock) — baseline compara DAT com isto
         self._cell_lote = defaultdict(dict)  # (sym, linha) -> {field: lote_num} — ciclo RefreshData de cada campo
         self._lote_atual = 0  # contador de ciclos RefreshData
         self._book_cells = defaultdict(lambda: defaultdict(dict))  # (sym, kind, janela) -> {linha: {field: val}}
         self._last_book_yield = defaultdict(float)
+        # v15.33: linhas cujo trio DAT/PRE/QUL coesionou neste ciclo — a
+        # decisão de emissão é ADIADA para o fim do lote RefreshData (os campos
+        # de identidade AGR/ACP/AVD chegam depois no mesmo ciclo; emitir no
+        # meio gerava identidade incompleta + re-emissão dupla).
+        self._coerentes_do_ciclo = []
+        self._coerentes_ciclo_set = set()
 
         # Import dinâmico para não quebrar no Linux
         if os.name == 'nt':
@@ -214,6 +235,39 @@ class ProfitRTDAdapter(MarketDataSource):
             except Exception as e:
                 log.warning(f"[RTD] Erro ao desconectar: {e}")
 
+    def _sig_tt(self, event_ts_ms, pre, qtd, agressor, buyer, seller):
+        """Identidade completa do trade p/ dedup v15.33."""
+        return (int(event_ts_ms), float(pre), int(qtd), agressor, buyer, seller)
+
+    def _emitir_unicos(self, sym: str, kind: str, sig) -> bool:
+        """Dedup v15.33: True se o trade deve ser emitido (1a ocorrencia).
+
+        Reemissoes persistentes (mesma identidade reentregue pelo RTD em
+        ciclos seguintes) sao suprimidas e contadas em _tt_duplicados.
+        Controle de memoria: expira por idade (expiry_s) + cap FIFO por
+        (sym, kind). Desligavel via config rtd.dedup_tt=false.
+        """
+        if not self._dedup_tt_on:
+            return True
+        chave = (sym, kind)
+        vistos = self._vistos_tt[chave]
+        agora = time.time()
+        # prune expirados (mais antigos primeiro)
+        while vistos:
+            k0, t0 = next(iter(vistos.items()))
+            if agora - t0 > self._dedup_tt_expiry_s:
+                vistos.popitem(last=False)
+            else:
+                break
+        if sig in vistos:
+            self._tt_duplicados[chave] += 1
+            return False
+        vistos[sig] = agora
+        if len(vistos) > self._dedup_tt_max:
+            vistos.popitem(last=False)
+        self._tt_unicos[chave] += 1
+        return True
+
     def _deve_emitir_tt(self, sym: str, event_ts_ms: int) -> bool:
         """Baseline R1 (v15.4): decide se uma linha T&T/RLP coerente é emitida.
 
@@ -235,6 +289,102 @@ class ProfitRTDAdapter(MarketDataSource):
         self._baseline_pending[sym] = False
         return True
 
+    def _emitir_linha_coerente(self, kind, sym, j_idx, linha):
+        """Decide e constrói o evento de uma linha T&T/RLP coerente (v15.33).
+
+        Chamado no FIM do ciclo RefreshData, com as células FINAIS (campos de
+        identidade AGR/ACP/AVD já atualizados neste ciclo). Retorna MarketEvent
+        ou None (suprimido / aguardando / rejeitado).
+
+        Gates, em ordem:
+          1. AGR/ACP/AVD no mesmo lote do trio (ou nunca entregues — janela
+             sem o campo) → identidade COMPLETA e estável para o dedup;
+          2. conteúdo válido (pre > 0, qtd > 0);
+          3. baseline: retrato pré-conexão absorvido SEM emitir (mas marcado
+             como visto p/ não virar evento depois);
+          4. timestamp válido (DAT inválido → fallback receive_ts);
+          5. dedup de reemissão persistente (identidade completa).
+        """
+        stream_key = (sym, kind, j_idx)
+        cell = self._book_cells[stream_key][linha]
+        lotes_linha = self._cell_lote[(stream_key, linha)]
+        lote_ref = lotes_linha.get('DAT', 0)
+        # v15.33: identidade exige TODOS os 6 campos no mesmo ciclo (medido no
+        # RAW 2026-09-03: AGR/ACP/AVD entregues em ~100% das linhas dos 4
+        # ativos). Linha com trio coerente mas AGR/ACP/AVD de outro ciclo
+        # aguarda 1 ciclo e emite 1x com identidade completa (sem re-emissao
+        # dupla com campos vazios).
+        for F in ('AGR', 'ACP', 'AVD'):
+            if lotes_linha.get(F, 0) != lote_ref:
+                return None
+        pre = fnum(cell.get('PRE'))
+        if pre <= 0:
+            return None
+        qtd = fint(cell.get('QUL'))
+        if qtd <= 0:
+            return None
+        dat_str = sstr(cell.get('DAT'))
+        event_ts_ms = dat_to_epoch_ms(dat_str)
+        receive_ns = now_ns()
+        agressor = "Comprador" if "compr" in sstr(cell.get('AGR')).lower() else "Vendedor"
+        buyer = sstr(cell.get('ACP'))
+        seller = sstr(cell.get('AVD'))
+
+        if not self._deve_emitir_tt(sym, event_ts_ms):
+            # Baseline absorve o retrato pré-conexão SEM emitir — mas marca a
+            # identidade como vista p/ a reentrega não virar evento depois.
+            if self._dedup_tt_on:
+                self._vistos_tt[(sym, kind)][
+                    self._sig_tt(event_ts_ms, pre, qtd, agressor, buyer, seller)] = time.time()
+            return None
+
+        self._tt_recebidos[sym] += 1
+
+        # Se DAT inválido, usar receive_ts como fallback (documentado)
+        if event_ts_ms <= 0:
+            event_ts_ms = receive_ns // 1_000_000
+            log.warning(f"[RTD] DAT invalido '{dat_str}' para {sym}, usando receive_ts como fallback")
+
+        valido, motivo = validate_event_ts(event_ts_ms, receive_ns)
+        if not valido:
+            log.warning(f"[RTD] {sym}: timestamp rejeitado: {motivo} (DAT={dat_str})")
+            return None
+
+        # v15.33: dedup de reemissão persistente (identidade completa), antes
+        # do detector de ordenamento p/ não poluir as métricas temporais.
+        if not self._emitir_unicos(sym, kind,
+                                   self._sig_tt(event_ts_ms, pre, qtd, agressor, buyer, seller)):
+            return None
+
+        # Fase 3: Detectar anomalias temporais
+        ord_result = self._ordering_detector.check(sym, event_ts_ms, receive_ns)
+        if ord_result.action == "REJECT":
+            return None
+        if ord_result.is_late:
+            log.debug(f"[RTD] {sym}: evento atrasado lag={ord_result.lag_ms}ms")
+        if ord_result.is_out_of_order:
+            log.warning(f"[RTD] {sym}: fora de ordem gap={ord_result.gap_ms}ms ({ord_result.reason})")
+        if ord_result.is_forward_jump:
+            log.warning(f"[RTD] {sym}: salto temporal {ord_result.gap_ms}ms")
+        if ord_result.is_backward_sequence:
+            log.warning(f"[RTD] {sym}: sequencia regressiva ({ord_result.reason})")
+
+        seq_id = next_sequence_id()
+        trade = TradeEvent(
+            symbol=sym, timestamp_ms=event_ts_ms, price=pre,
+            quantity=qtd,
+            aggressor=agressor,
+            buyer=buyer, seller=seller,
+            received_at_ns=receive_ns,
+            sequence_id=seq_id,
+        )
+        return MarketEvent(
+            type='RLP' if kind == 'rlp' else 'TRADE',
+            payload=trade, timestamp_ms=event_ts_ms,
+            symbol=sym, janela_id=j_idx,
+            window_name=f'T&T{j_idx}', is_rlp=(kind == 'rlp'),
+        )
+
     def events(self) -> Iterator[MarketEvent]:
         """Loop de polling transformado em iterador de contratos."""
         if self._connect_ts_ms == 0:
@@ -250,6 +400,8 @@ class ProfitRTDAdapter(MarketDataSource):
 
             pairs = parse_refresh_data(data)
             self._lote_atual += 1  # identifica este ciclo RefreshData
+            self._coerentes_do_ciclo = []
+            self._coerentes_ciclo_set = set()
             for tid, val in pairs:
                 info = self._topic_map.get(tid)
                 if not info: continue
@@ -257,16 +409,20 @@ class ProfitRTDAdapter(MarketDataSource):
 
                 if kind == "tt":
                     # v14.5+: coerência de lote + DAT-primário.
-                    # NENHUMA deduplicação por conteúdo (v14.7 — RTD não reenvia
-                    # linhas; cada linha coerente é um trade real, inclusive
-                    # rajadas com campos idênticos no mesmo milissegundo).
+                    # v15.33: dedup de REEMISSÃO persistente (o RTD reentrega as
+                    # linhas visíveis da janela a cada RefreshData) com
+                    # identidade COMPLETA — ts+preco+qtd+agressor+compradora+
+                    # vendedora. Trades genuinamente distintos (qualquer campo
+                    # diferente) NUNCA colidem; apenas a mesma linha reentregue
+                    # é suprimida (1 trade = 1 evento).
                     # O gatilho de coerência dispara em QUALQUER um dos 3 campos
                     # chave (DAT/PRE/QUL), não só no DAT. Isso resolve o race
                     # condition onde DAT chega antes de PRE/QUL no mesmo ciclo.
                     # v14.8: Estado das células separado POR JANELA — TT, RLP e
-                    # BOOK do mesmo ativo não podem compartilhar o mesmo dict
-                    # (contaminação cruzada: RLP sobrescrevia TT e vice-versa;
-                    # ACP/AVD do BOOK colidiam com ACP/AVD do TT).
+                    # BOOK do mesmo ativo não podem compartilhar o mesmo dict.
+                    # v15.33: aqui só ACUMULA a linha coerente; a decisão de
+                    # emissão é adiada para o fim do ciclo (AGR/ACP/AVD chegam
+                    # depois de DAT/PRE/QUL no mesmo refresh).
                     stream_key = (sym, 'tt', j_idx)
                     cell = self._book_cells[stream_key][linha]
                     cell[field] = val
@@ -276,135 +432,44 @@ class ProfitRTDAdapter(MarketDataSource):
                     # Só processa quando algum dos 3 campos-chave chega
                     if field not in ('DAT', 'PRE', 'QUL'):
                         continue
-                    
-                    # Coerência: todos os 3 campos devem ter o mesmo lote
+
+                    # Coerência (trio): DAT/PRE/QUL no mesmo lote
                     lote_ref = lotes_linha.get('DAT', 0)
                     if (lote_ref == 0
                             or lotes_linha.get('PRE', 0) != lote_ref
                             or lotes_linha.get('QUL', 0) != lote_ref):
                         continue  # Aguardar convergência — re-avalia no próximo campo
 
-                    # Validação de conteúdo
-                    pre = fnum(cell.get('PRE'))
-                    if pre <= 0:
-                        continue
-                    qtd = fint(cell.get('QUL'))
-                    if qtd <= 0:
-                        continue
-                    
-                    # v14.7: RTD nunca envia linha duplicada — nenhuma barreira
-                    # de dedup por linha. Cada linha coerente é um trade real.
-                    # v15.4: baseline só absorve retrato pré-conexão (DAT <
-                    # início da captura) — dado novo nunca é descartado.
-                    dat_str = sstr(cell.get('DAT'))
-                    event_ts_ms = dat_to_epoch_ms(dat_str)
-                    receive_ns = now_ns()
-
-                    if not self._deve_emitir_tt(sym, event_ts_ms):
-                        continue
-
-                    self._tt_recebidos[sym] += 1
-
-                    # Se DAT invalido, usar receive_ts como fallback (documentado)
-                    if event_ts_ms <= 0:
-                        event_ts_ms = receive_ns // 1_000_000
-                        log.warning(f"[RTD] DAT invalido '{dat_str}' para {sym}, usando receive_ts como fallback")
-
-                    # Validar timestamp (rejeitar se muito no futuro/passado)
-                    valido, motivo = validate_event_ts(event_ts_ms, receive_ns)
-                    if not valido:
-                        log.warning(f"[RTD] {sym}: timestamp rejeitado: {motivo} (DAT={dat_str})")
-                        continue
-
-                    # Fase 3: Detectar anomalias temporais
-                    ord_result = self._ordering_detector.check(sym, event_ts_ms, receive_ns)
-
-                    if ord_result.action == "REJECT":
-                        # REJECT só ocorre para timestamp inválido (<= 0).
-                        # Duplicatas de timestamp são CONTADAS mas ACEITAS desde
-                        # v14.6 (burst trades legítimos da B3 — mesmo ms, mesmo
-                        # preço, mesma quantidade podem coexistir).
-                        continue
-
-                    if ord_result.is_late:
-                        log.debug(f"[RTD] {sym}: evento atrasado lag={ord_result.lag_ms}ms")
-                    if ord_result.is_out_of_order:
-                        log.warning(f"[RTD] {sym}: fora de ordem gap={ord_result.gap_ms}ms ({ord_result.reason})")
-                    if ord_result.is_forward_jump:
-                        log.warning(f"[RTD] {sym}: salto temporal {ord_result.gap_ms}ms")
-                    if ord_result.is_backward_sequence:
-                        log.warning(f"[RTD] {sym}: sequencia regressiva ({ord_result.reason})")
-
-                    seq_id = next_sequence_id()
-                    trade = TradeEvent(
-                        symbol=sym, timestamp_ms=event_ts_ms, price=pre,
-                        quantity=qtd,
-                        aggressor="Comprador" if "compr" in sstr(cell.get('AGR')).lower() else "Vendedor",
-                        buyer=sstr(cell.get('ACP')), seller=sstr(cell.get('AVD')),
-                        received_at_ns=receive_ns,
-                        sequence_id=seq_id,
-                    )
-                    # v14: incluir janela_id no MarketEvent
-                    yield MarketEvent(type='TRADE', payload=trade, timestamp_ms=event_ts_ms,
-                                      symbol=sym, janela_id=j_idx,
-                                      window_name=f'T&T{j_idx}')
+                    chave = ('tt', sym, j_idx, linha)
+                    if chave not in self._coerentes_ciclo_set:
+                        self._coerentes_ciclo_set.add(chave)
+                        self._coerentes_do_ciclo.append(chave)
 
                 elif kind == "rlp":
                     # v14.5: RLP — coerência + gatilho em qualquer campo-chave
                     # v14.8: Estado separado por janela (ver nota no bloco tt)
+                    # v15.33: RLP — mesma política do TT (acumula e decide no
+                    # fim do ciclo; dedup próprio por (sym, 'rlp')).
                     stream_key = (sym, 'rlp', j_idx)
                     cell = self._book_cells[stream_key][linha]
                     cell[field] = val
                     lotes_linha = self._cell_lote[(stream_key, linha)]
                     lotes_linha[field] = self._lote_atual
-                    
+
                     if field not in ('DAT', 'PRE', 'QUL'):
                         continue
-                    
-                    # Coerência: todos os 3 campos devem ter o mesmo lote
+
+                    # Coerência (trio): DAT/PRE/QUL no mesmo lote
                     lote_ref = lotes_linha.get('DAT', 0)
                     if (lote_ref == 0
                             or lotes_linha.get('PRE', 0) != lote_ref
                             or lotes_linha.get('QUL', 0) != lote_ref):
                         continue
-                    
-                    pre = fnum(cell.get('PRE'))
-                    if pre <= 0: continue
-                    qtd = fint(cell.get('QUL'))
-                    if qtd <= 0: continue
-                    
-                    # v14.7: RLP — mesmo princípio do TT, sem dedup por linha
-                    # v15.4: baseline só absorve retrato pré-conexão
-                    dat_str = sstr(cell.get('DAT'))
-                    event_ts_ms = dat_to_epoch_ms(dat_str)
-                    receive_ns = now_ns()
-                    if not self._deve_emitir_tt(sym, event_ts_ms):
-                        continue
-                    
-                    self._tt_recebidos[sym] += 1
-                    
-                    if event_ts_ms <= 0:
-                        event_ts_ms = receive_ns // 1_000_000
-                    
-                    valido, motivo = validate_event_ts(event_ts_ms, receive_ns)
-                    if not valido: continue
-                    
-                    ord_result = self._ordering_detector.check(sym, event_ts_ms, receive_ns)
-                    if ord_result.action == "REJECT": continue
-                    
-                    seq_id = next_sequence_id()
-                    trade = TradeEvent(
-                        symbol=sym, timestamp_ms=event_ts_ms, price=pre,
-                        quantity=qtd,
-                        aggressor="Comprador" if "compr" in sstr(cell.get('AGR')).lower() else "Vendedor",
-                        buyer=sstr(cell.get('ACP')), seller=sstr(cell.get('AVD')),
-                        received_at_ns=receive_ns,
-                        sequence_id=seq_id,
-                    )
-                    # v14: RLP com janela_id
-                    yield MarketEvent(type='RLP', payload=trade, timestamp_ms=event_ts_ms,
-                                      symbol=sym, janela_id=j_idx,
-                                      window_name=f'T&T{j_idx}', is_rlp=True)
+
+                    chave = ('rlp', sym, j_idx, linha)
+                    if chave not in self._coerentes_ciclo_set:
+                        self._coerentes_ciclo_set.add(chave)
+                        self._coerentes_do_ciclo.append(chave)
 
                 elif kind == "book":
                     # v14.8: BOOK com estado próprio — não compartilha células
@@ -445,6 +510,14 @@ class ProfitRTDAdapter(MarketDataSource):
                             window_name=f'BOOK{janela_idx}'
                         )
             
+            # v15.33: processa as linhas coerentes deste ciclo com as células
+            # FINAIS (identidade completa e estável para o dedup).
+            for chave in self._coerentes_do_ciclo:
+                kind, sym, j_idx, linha = chave
+                ev = self._emitir_linha_coerente(kind, sym, j_idx, linha)
+                if ev is not None:
+                    yield ev
+
             # v15.4: sem reset global por ciclo — o baseline de cada símbolo
             # encerra individualmente quando chega o 1º dado com DAT >= início
             # da captura (_deve_emitir_tt). Reset por ciclo engolia o 1º trade
@@ -467,10 +540,11 @@ class ProfitRTDAdapter(MarketDataSource):
         """Retorna estatísticas de RECEBIMENTO por ativo (nome legado mantido
         para compatibilidade com o dashboard — key JSON `dedup_stats`).
 
-        Desde v14.7 NÃO existe deduplicação por conteúdo no adapter: os
-        contadores refletem linhas COERENTES recebidas (cada uma = 1 trade),
-        não "linhas únicas após dedup". Inclui TODOS os ativos conectados
-        (tt_map + rlp_map + book_map), não só os que já tiveram trades.
+        v15.33: `tt_recebidos` = linhas COERENTES recebidas (inclui
+        reemissões); `tt_unicos` = trades emitidos (após dedup de reemissão);
+        `tt_duplicados` = reemissões suprimidas. Inclui TODOS os ativos
+        conectados (tt_map + rlp_map + book_map), não só os que já tiveram
+        trades.
         """
         # União de todos os ativos conhecidos
         todos_ativos = set(self._tt_map.values()) | set(self._rlp_map.values()) | set(self._book_map.values())
@@ -478,14 +552,20 @@ class ProfitRTDAdapter(MarketDataSource):
         for sym in sorted(todos_ativos):
             resultado[sym] = {
                 'tt_recebidos': self._tt_recebidos.get(sym, 0),
+                'tt_unicos': (self._tt_unicos.get((sym, 'tt'), 0)
+                              + self._tt_unicos.get((sym, 'rlp'), 0)),
+                'tt_duplicados': (self._tt_duplicados.get((sym, 'tt'), 0)
+                                  + self._tt_duplicados.get((sym, 'rlp'), 0)),
                 'baseline_pendente': self._baseline_pending.get(sym, False),
             }
         return resultado
 
     def _reset_dedup(self):
-        """Reseta o baseline pendente por ativo (para testes).
-        Nome legado — não existe dedup; apenas re-permite o 1º ciclo."""
+        """Reseta baseline + estrutura de dedup (para testes)."""
         self._baseline_pending = defaultdict(lambda: True)
+        self._vistos_tt = defaultdict(OrderedDict)
+        self._tt_unicos = defaultdict(int)
+        self._tt_duplicados = defaultdict(int)
 
 # Re-exporta constantes dos novos módulos
 from adapters.rtd_connection import (

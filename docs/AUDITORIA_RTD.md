@@ -269,3 +269,43 @@ Tempo para saturar fila (100k):
 - ⚠️ Fila pode saturar em rajadas extremas
 
 **O sistema está pronto para produção em condições normais.** Em cenários derajada extrema, eventos podem ser perdidos, mas o risco é baixo.
+
+
+---
+
+## v15.33 — Dedup de reemissao persistente da janela T&T/RLP (identidade completa)
+
+**Evidencia (RAW 2026-09-03):** o RTD reentrega as linhas visiveis da janela a
+cada RefreshData — 76-98% das linhas gravadas eram reemissoes da mesma linha
+(WIN 75,8% / WDO 94,5% / IND 96,9% / DOL 98,0%). Negocios unicos IND ≈ 7,2k vs
+9,1k no Profit (79%).
+
+**Correcao (`adapters/profit_rtd.py`):**
+- Dedup por identidade COMPLETA: `(ts_ms, preco, qtd, agressor, compradora,
+  vendedora)` — por (sym, kind) separado (tt vs rlp). Qualquer campo diferente
+  = trade novo (nunca elimina negocio distinto).
+- Controle de memoria: expiracao por idade (`rtd.dedup_tt_expiry_s`, default
+  900s) + cap FIFO por ativo (`rtd.dedup_tt_max_por_ativo`, default 200k).
+  Desligavel: `rtd.dedup_tt=false`.
+- Baseline absorve o retrato pre-conexao e MARCA a identidade como vista (a
+  reentrega pos-baseline nao vira evento).
+- Contadores por ativo no `dedup_stats` (dashboard): `tt_recebidos` (linhas
+  coerentes), `tt_unicos` (emitidos), `tt_duplicados` (suprimidos).
+
+**Bug pre-existente corrigido durante a implementacao:** a emissao disparava
+quando so o trio DAT/PRE/QUL coesionava — AGR/ACP/AVD chegam DEPOIS no mesmo
+refresh, entao a 1a emissao saia com identidade vazia/antiga e a reentrega com
+campos completos gerava 2 eventos. Corrigido adiando a decisao para o fim do
+ciclo e exigindo os 6 campos no mesmo lote (medido: AGR/ACP/AVD entregues em
+~100% das linhas dos 4 ativos — sem risco de stall).
+
+**Limitacao documentada:** trades identicos campo-a-campo no mesmo milissegundo
+sao indistinguiveis na fonte e colapsam em 1 evento (rajadas de identidade
+identica nao sao separaveis sem id de troca da bolsa).
+
+**Testes (`testes/test_dedup_reemissao_v1533.py`, 14):** helper unit (10x
+reentrega -> 1; 10 distintos -> 10; campo diferente nunca colide; por ativo;
+tt vs rlp; FIFO cap; expiracao; desligavel; contadores) + integracao events()
+real (reentrega persistente -> 1 evento com identidade completa; chegada split
+-> 1 emissao limpa; trade novo no ciclo seguinte). Suite completa: 1045 passed
+(1031 -> 1045), zero regressoes.
