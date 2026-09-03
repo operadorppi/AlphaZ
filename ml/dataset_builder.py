@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 dataset_builder.py — Junta features 100ms + labels + asof join (WIN×WDO)
 e exporta como Parquet pronto para treino de ML.
@@ -120,6 +120,22 @@ def merge_features_labels(features, labels):
 _LABEL_COLS = ['label', 'tp_atingido', 'sl_atingido', 'preco_saida',
                'retorno_pts', 'duracao_label_ms']
 
+# Colunas que causam vazamento (leakage) — NUNCA devem ser usadas como features
+_LEAKAGE_COLS = ['preco_saida', 'duracao_label_ms', 'tp_atingido', 'sl_atingido']
+
+
+def _remover_colunas_leakage(df):
+    """Remove colunas que causam vazamento de dados (leakage).
+    
+    Estas colunas só existem APÓS o trade fechar e não podem ser
+    usadas como features de entrada no modelo.
+    """
+    cols_para_remover = [c for c in _LEAKAGE_COLS if c in df.columns]
+    if cols_para_remover:
+        print(f'  [LEAKAGE] Removendo colunas de vazamento: {cols_para_remover}')
+        df = df.drop(columns=cols_para_remover)
+    return df
+
 
 def merge_features_labels_chunked(arquivo_features, labels_df, chunk_size=500_000):
     """Junta features (lendo JSONL em chunks) com labels (DataFrame) por ts_ms.
@@ -165,6 +181,8 @@ def merge_features_labels_chunked(arquivo_features, labels_df, chunk_size=500_00
             df[col] = df[col].fillna(0)
         elif col in ('tp_atingido', 'sl_atingido'):
             df[col] = df[col].fillna(False)
+    # REMOÇÃO DE LEAKAGE: remover colunas que vazam informação do futuro
+    df = _remover_colunas_leakage(df)
     return df
 
 
@@ -299,6 +317,13 @@ def main():
     n_com_label = int((df['label'] != 0).sum()) if 'label' in df.columns else 0
     print(f'  Com label: {n_com_label} ({n_com_label/len(df)*100:.1f}%)')
     print(f'  Colunas: {len(df.columns)}')
+    
+    # Verificar se ainda há colunas de leakage
+    cols_leakage_restantes = [c for c in _LEAKAGE_COLS if c in df.columns]
+    if cols_leakage_restantes:
+        print(f'  [ALERTA] Colunas de leakage ainda presentes: {cols_leakage_restantes}')
+        print(f'  [ALERTA] Removendo antes de salvar...')
+        df = df.drop(columns=cols_leakage_restantes)
     
     # Salvar
     output = args.output or str(Path(SAVE_DIR) / f'dataset_final.{args.formato}')

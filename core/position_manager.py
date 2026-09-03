@@ -40,7 +40,7 @@ class PositionManager:
         self._lado_anterior = 0
         self.sinal_contador = 0
         self.confianca_ewma = 0.0
-        self._cooldown_until = 0.0  # v11.16: timestamp (time.time()) até quando bloqueado
+        # v12.4 (Fase 6): Cooldown removido — RiskEngine._check_cooldown é a fonte de verdade
 
     def suavizar(self, lado_bruto, confirmacao_necessaria=None):
         """Suavização de sinal com confirmação por N segmentos."""
@@ -79,42 +79,70 @@ class PositionManager:
 
         lado = self.suavizar(sinal_int,
                              confirmacao_necessaria=self.config.get('confirmacao_necessaria', 3))
-        limiar = limiar_confirmacao if limiar_confirmacao is not None else self.config.get('limiar_confirmacao', 0.55)
-        sinal_valido = (lado != 0 and abs(self.confianca_ewma) >= limiar)
+        # v12.4 (Fase 6): Risco é decisão do RiskEngine, não do PositionManager.
+        # A confiança/streak ainda são necessários para suavização do sinal,
+        # mas a validação de "posso abrir?" vem do RiskDecision injetado.
 
         if self.posicao is not None:
             # v10.9 (Fase 9): Lógica de Piramidação (Averaging Up)
+            # v12.3 (Fase 5): Máquina de estados clara — VALIDAR → APROVADA/REJEITADA
             pos = self.posicao
             ps_config = self.config.get('position_sizing', {})
             max_qty = ps_config.get('max_position_size', 5)
             conf_piramide = self.config.get('confianca_piramidacao', 0.85)
-            
+            ml_threshold_piram = self.config.get('ml_threshold_piramidacao', 0.65)
+            pnl_min_piram = self.config.get('pnl_min_piramidacao', 50)
+
             pnl_atual = (preco - pos['preco_medio']) if pos['lado'] == 'C' else (pos['preco_medio'] - preco)
-            
-            # Condições para piramidar:
-            # 1. Sinal na mesma direção
-            # 2. Confiança extrema (> 0.85)
-            # 3. Posição atual já está no lucro (mínimo 50 pts)
-            # 4. Ainda não atingiu o limite de contratos
             mesmo_lado = (lado > 0 and pos['lado'] == 'C') or (lado < 0 and pos['lado'] == 'V')
-            
-            # v11.15: Piramidação considera ml_prob E confiança heurística
             ml_piramida = pos.get('ml_prob', 0.5)
-            if mesmo_lado and abs(self.confianca_ewma) >= conf_piramide and pnl_atual >= 50 and pos['quantidade'] < max_qty:
-                if ml_piramida >= 0.65:  # ML confirma piramidação
+
+            # === ESTADO 1: PIRAMIDAÇÃO_SOLICITADA ===
+            piramide_solicitada = (
+                mesmo_lado
+                and abs(self.confianca_ewma) >= conf_piramide
+                and pnl_atual >= pnl_min_piram
+                and pos['quantidade'] < max_qty
+            )
+
+            if piramide_solicitada:
+                # === ESTADO 2: VALIDAR ===
+                # Validação ML: o modelo precisa confirmar a piramidação
+                ml_aprovou = ml_piramida >= ml_threshold_piram
+
+                if ml_aprovou:
+                    # === ESTADO 3a: APROVADA → EXECUTAR ===
                     qtd_add = 1
                     nova_qtd = pos['quantidade'] + qtd_add
-                    pos['preco_medio'] = ((pos['preco_medio'] * pos['quantidade']) + (preco * qtd_add)) / nova_qtd
+                    novo_preco_medio = (
+                        (pos['preco_medio'] * pos['quantidade']) + (preco * qtd_add)
+                    ) / nova_qtd
+
+                    # ATUALIZAR POSIÇÃO (só aqui, nunca antes)
+                    pos['preco_medio'] = novo_preco_medio
                     pos['quantidade'] = nova_qtd
-                    pos['motivos'].append(f"PIRAMIDE_CONF_{self.confianca_ewma:.2f}_ML_{ml_piramida:.2f}")
+                    # Stop sobe para breakeven do novo preço médio
+                    pos['stop_preco'] = novo_preco_medio
+                    pos['motivos'].append(
+                        f"PIRAMIDE_CONF_{self.confianca_ewma:.2f}_ML_{ml_piramida:.2f}"
+                    )
+                    log.info(
+                        f"[EXEC] Piramidação aprovada: {pos['ativo']} "
+                        f"+{qtd_add} @ {preco}. Nova Qtd: {nova_qtd}, "
+                        f"PM: {novo_preco_medio:.1f}"
+                    )
+                    if self.persistence:
+                        self.persistence.salvar_checkpoint(self.posicao)
                 else:
-                    pos['motivos'].append(f"PIRAMIDE_BLOQ_ML_{ml_piramida:.2f}")
-                
-                # Ao piramidar, subimos o stop para o breakeven do novo preço médio para garantir risco zero na adição
-                pos['stop_preco'] = pos['preco_medio']
-                log.info(f"[EXEC] Piramidação: {pos['ativo']} adicionado +{qtd_add} @ {preco}. Nova Qtd: {nova_qtd}")
-                if self.persistence:
-                    self.persistence.salvar_checkpoint(self.posicao)
+                    # === ESTADO 3b: REJEITADA → NÃO ALTERAR POSIÇÃO ===
+                    # Stop e preço médio NÃO mudam
+                    pos['motivos'].append(
+                        f"PIRAMIDE_REJEITADA_ML_{ml_piramida:.2f}"
+                    )
+                    log.info(
+                        f"[EXEC] Piramidação rejeitada (ML={ml_piramida:.2f} < "
+                        f"{ml_threshold_piram}). Posição inalterada."
+                    )
 
             resultado = self.checar_saidas(preco, max_holding_s=max_holding_s)
             sl_offset = abs(pos.get('stop_preco', preco) - pos['preco_medio']) if pos.get('stop_preco') else pos['tp']
@@ -124,25 +152,18 @@ class PositionManager:
                 motivo=''
             )
 
-        # v11.16: Cooldown pós-fechamento — bloqueia reentrada imediata
-        if time.time() < self._cooldown_until:
-            restante = self._cooldown_until - time.time()
-            return Action(tipo='COOLDOWN', lado='', preco=preco, tp=0.0, sl=0.0,
-                          motivo=f'cooldown {restante:.1f}s restantes')
+        # v12.4 (Fase 6): Cooldown e validação de risco são do RiskEngine.
+        # PositionManager apenas executa a RiskDecision recebida.
 
-        if sinal_valido and preco > 0 and self._sinal_streak >= 2:
-            # v10.21: Injeção de RiskDecision para desacoplamento. Se não injetado, consulta o manager local.
+        if lado != 0 and preco > 0 and self._sinal_streak >= 2:
+            # RiskDecision DEVE ser injetada pelo chamador (app.py → risk_engine.avaliar())
             if not decision:
-                res_recentes = self.learning.resultados if self.learning else []
-                decision = self.risk.pode_abrir(signal, res_recentes)
+                return Action(tipo='REJEITADO', lado='', preco=preco, tp=0.0, sl=0.0,
+                              motivo='SEM_RISK_DECISION')
 
-            if not decision or not decision.permitido:
-                motivo = decision.motivo if decision else "RISK_DECISION_MISSING"
-                return Action(tipo='REJEITADO', lado='', preco=preco, tp=0.0, sl=0.0, motivo=motivo)
-
-            # v10.12 (Fase 9): Registro de Slippage
-            # Comparamos o preço de execução com o preço de referência do sinal
-            self.risk.registrar_execucao(ativo, signal.preco_ref, preco) 
+            if not decision.permitido:
+                return Action(tipo='REJEITADO', lado='', preco=preco, tp=0.0, sl=0.0,
+                              motivo=decision.motivo)
 
             l = 'C' if lado > 0 else 'V'
             stop_preco = (preco - decision.sl) if l == 'C' else (preco + decision.sl)
@@ -154,40 +175,23 @@ class PositionManager:
                     'aberta_em': time.time()
                 })
 
-            quantidade = decision.size or 1
             ml_prob = getattr(signal, 'ml_prob', 0.5)
-            
-            # v11.15: Sizing baseado no ML score
-            # ml_prob > 0.7: alto convicção → size aumentado
-            # ml_prob > 0.6: convicção normal → size normal
-            # ml_prob < 0.55: baixa convicção → size reduzido
-            ps_config = self.config.get('position_sizing', {})
-            max_qty = ps_config.get('max_position_size', 5)
-            ml_sizing = self.config.get('ml_sizing', True)
-            
-            if ml_sizing and ml_prob > 0.7:
-                quantidade = min(quantidade + 1, max_qty)
-                motivo_ml = f'ML_ALTO ({ml_prob:.2f})'
-            elif ml_sizing and ml_prob < 0.55:
-                quantidade = max(1, quantidade - 1)
-                motivo_ml = f'ML_BAIXO ({ml_prob:.2f})'
-            else:
-                motivo_ml = f'ML_NORMAL ({ml_prob:.2f})'
+            quantidade = decision.size or 1
 
             self.posicao = {
                 'ativo': ativo, 'lado': l, 'entrada': preco, 'preco_medio': preco,
                 'stop_preco': stop_preco, 'tp': decision.tp,
-                'aberta_em': time.time(), 'motivos': list(signal.motivos) + [motivo_ml], 'contrib': list(signal.contrib),
+                'aberta_em': time.time(), 'motivos': list(signal.motivos), 'contrib': list(signal.contrib),
                 'prev_idx': len(self.learning.previsoes) - 1 if self.learning else 0,
                 'mfe': 0.0, 'mae': 0.0, 'breakeven_ativado': False,
                 'regime_abertura': regime or 'indefinido',
                 'quantidade': quantidade,
                 'ml_prob': ml_prob
             }
-            self.risk.trades_dia += 1
             if self.persistence:
                 self.persistence.salvar_checkpoint(self.posicao)
-            return Action(tipo='ABRIR', lado=l, preco=preco, tp=decision.tp, sl=decision.sl, motivo=';'.join(signal.motivos))
+            return Action(tipo='ABRIR', lado=l, preco=preco, tp=decision.tp, sl=decision.sl,
+                          motivo=';'.join(signal.motivos))
 
         return Action(tipo='AGUARDE', lado='', preco=preco, tp=0.0, sl=0.0, motivo='')
 
@@ -300,17 +304,18 @@ class PositionManager:
         sl_offset = abs(sl_abs - pos['preco_medio']) if sl_abs > 0 else pos['tp']
         tp_val = pos['tp']
 
-        self.risk.registrar_resultado(leveraged_pnl, acertou, pos.get('ativo', self.ativo_principal))
+        # v12.4 (Fase 6): RiskEngine.registrar_resultado (com ativo) ou RiskManager (compat)
+        try:
+            self.risk.registrar_resultado(leveraged_pnl, acertou, pos.get('ativo', self.ativo_principal))
+        except TypeError:
+            # RiskEngine.registrar_resultado tem assinatura diferente
+            self.risk.registrar_resultado(leveraged_pnl, acertou)
 
         self.posicao = None
         self.confianca_ewma = 0.0
         self.sinal_confirmado = 0
         self._lado_anterior = 0
         self.sinal_contador = 0
-        
-        # v11.16: Cooldown pós-fechamento
-        cooldown_ms = self.config.get('cooldown_entre_trades_ms', 5000)
-        self._cooldown_until = time.time() + (cooldown_ms / 1000.0)
         if self.persistence:
             self.persistence.salvar_checkpoint(None)
         

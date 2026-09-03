@@ -31,11 +31,24 @@ from unittest.mock import MagicMock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import motor_web as mw
+# motor_web.py foi decomposto na refatoracao v10.1. A thread escritora de BOOK
+# e os helpers de Parquet vivem agora em adapters.rtd_writer.
+# ATENCAO: o alias deve apontar para o MODULO REAL (nao um re-export), porque
+# os testes monocam `mw.write_parquet_part` etc. e `thread_escritora` resolve
+# esses nomes nos seus proprios globals de modulo.
+from adapters import rtd_writer as mw
 
 
-def _make_linha_book(tms=1724000000000, simbolo="WINV26"):
-    """Linha minima de snapshot BOOK (time_ms + simbolo bastam p/ o writer)."""
+def _make_linha_book(tms=None, simbolo="WINV26"):
+    """Linha minima de snapshot BOOK (time_ms + simbolo bastam p/ o writer).
+
+    tms default = AGORA. Nao usar timestamp fixo: `_validar_timestamp_ms`
+    (v11.2) rejeita time_ms com mais de _TS_PASSADO_MAX_S (300s) de atraso,
+    entao um valor literal de 2024 seria descartado antes de chegar ao buffer
+    e o writer nunca chamaria write_parquet_part.
+    """
+    if tms is None:
+        tms = int(time.time() * 1000)
     return {
         "capture_sequence": 1,
         "snapshot_id": 1,
@@ -58,7 +71,9 @@ class TestBookWriterTransacional:
         monkeypatch.setattr(mw, '_registrar_stat', lambda *a, **k: None)
         monkeypatch.setattr(mw, '_live_inc', lambda *a, **k: None)
         monkeypatch.setattr(mw, 'INTERVALO_SALVAMENTO_S', 0.1)
-        monkeypatch.setattr(mw, 'logger', MagicMock())
+        # rtd_writer usa `log = logging.getLogger(__name__)`; o motor_web antigo
+        # chamava de `logger`. Silenciar o log real durante o teste.
+        monkeypatch.setattr(mw, 'log', MagicMock())
         # thread_escritora chama signal.signal no corpo — vira no-op no teste
         monkeypatch.setattr(signal, 'signal', lambda *a, **k: None)
         return calls

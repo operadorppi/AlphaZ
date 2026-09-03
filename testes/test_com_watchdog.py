@@ -29,7 +29,13 @@ from unittest.mock import MagicMock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import motor_web as mw
+import pytest
+
+# motor_web.py foi decomposto na refatoracao v10.1. COMHeartbeatMonitor e as
+# constantes de watchdog vivem agora em adapters.com_watchdog.
+# O loop COM em si (_thread_com_ciclo) NAO foi migrado: o substituto e
+# ProfitRTDAdapter.events() (adapters/profit_rtd.py), gerador de MarketEvent.
+from adapters import com_watchdog as mw
 
 
 # ============================================================================
@@ -170,6 +176,18 @@ class TestCOMThreadCicloWatchdog:
             raise RuntimeError("TIMEOUT: _refresh_blocking nao foi desbloqueado")
         raise RuntimeError("COM encerrado pelo watchdog")  # simula erro apos terminacao
 
+    @pytest.mark.xfail(
+        strict=False,
+        reason=(
+            "ORFAO DA REFATORACAO v10.1: `_thread_com_ciclo` (loop COM baseado em "
+            "filas) nao existe mais em nenhum modulo vivo — so em "
+            "docs/archive/motor_web_legacy.py. O sucessor arquitetural e "
+            "ProfitRTDAdapter.events() (adapters/profit_rtd.py), um gerador de "
+            "MarketEvent, que NAO usa filas, stats_lock, live_stats nem o dict "
+            "`estado`. Reescrever este teste exige remodelar a integracao "
+            "watchdog x loop contra o novo adapter (ver ONBOARDING)."
+        ),
+    )
     def test_loop_sai_com_watchdog_quando_com_trava(self, monkeypatch):
         """_thread_com_ciclo sai via stuck_event quando _refresh bloqueia.
 

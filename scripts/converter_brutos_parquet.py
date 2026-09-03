@@ -1,160 +1,83 @@
 #!/usr/bin/env python3
 """
-converter_brutos_parquet.py — Converte JSONL brutos em Parquet por ativo.
+converter_brutos_parquet.py — Valida dados RAW na estrutura Hive Parquet.
 
-Lê raw_negocios_ms_*.jsonl, raw_book_ms_*.jsonl e raw_rlp_ms_*.jsonl
-para um dado dia, funde por ativo e salva como Parquet.
+v14: Os dados JÁ SÃO Parquet em estrutura Hive. Este script apenas
+valida e gera um relatório de integridade.
+
+Estrutura:
+  RAW/data_type=TT/date=YYYYMMDD/asset=WIN/part-0.parquet
+  RAW/data_type=BOOK/date=YYYYMMDD/asset=WIN/part-0.parquet
 
 Uso:
   python scripts/converter_brutos_parquet.py --dia 20260901
-  python scripts/converter_brutos_parquet.py                  # ontem
-  python scripts/converter_brutos_parquet.py --save-dir D:\\MarketData\\mimo
+  python scripts/converter_brutos_parquet.py --save-dir D:\\MarketData\\Profit
 """
 
 import argparse
-import json
 import os
 import sys
-from collections import defaultdict
-from datetime import date, timedelta
 from pathlib import Path
+from datetime import date, timedelta
 
 try:
-    import pyarrow as pa
     import pyarrow.parquet as pq
     HAS_PYARROW = True
 except ImportError:
     HAS_PYARROW = False
 
-try:
-    import pandas as pd
-    HAS_PANDAS = True
-except ImportError:
-    HAS_PANDAS = False
-
-
-def find_jsonl_files(save_dir: str, dia: str, prefix: str) -> list:
-    """Encontra todos os JSONL com o prefixo e dia especificados."""
-    files = []
-    for f in Path(save_dir).glob(f'{prefix}*{dia}*.jsonl'):
-        if f.stat().st_size > 0:
-            files.append(f)
-    return sorted(files)
-
-
-def load_jsonl(files: list) -> list:
-    """Carrega todos os registros de uma lista de arquivos JSONL."""
-    records = []
-    for f in files:
-        with open(f, 'r', encoding='utf-8') as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    records.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue
-    return records
-
-
-def split_by_ativo(records: list) -> dict:
-    """Divide registros por ativo."""
-    by_ativo = defaultdict(list)
-    for r in records:
-        ativo = r.get('ativo', 'UNKNOWN')
-        by_ativo[ativo].append(r)
-    return dict(by_ativo)
-
-
-def save_parquet_pandas(records: list, out_path: Path):
-    """Salva como Parquet usando pandas."""
-    df = pd.DataFrame(records)
-    df = df.sort_values('ts_ms').reset_index(drop=True)
-    df.to_parquet(out_path, index=False, engine='pyarrow')
-
-
-def save_parquet_pyarrow(records: list, out_path: Path):
-    """Salva como Parquet usando pyarrow (fallback sem pandas)."""
-    if not records:
-        return
-    # Normalizar todos os registros para ter as mesmas chaves
-    all_keys = set()
-    for r in records:
-        all_keys.update(r.keys())
-    columns = {}
-    for key in sorted(all_keys):
-        values = []
-        for r in records:
-            v = r.get(key)
-            if isinstance(v, (dict, list)):
-                v = json.dumps(v, ensure_ascii=False)
-            values.append(v)
-        columns[key] = values
-    table = pa.table(columns)
-    table = table.sort_by('ts_ms')
-    pq.write_table(table, out_path)
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from adapters.file_storage import find_hive_files
 
 
 def main():
-    ap = argparse.ArgumentParser(description='Converte JSONL brutos em Parquet por ativo')
+    ap = argparse.ArgumentParser(description='Valida dados RAW na estrutura Hive')
     ap.add_argument('--dia', default=None, help='YYYYMMDD (default: ontem)')
     ap.add_argument('--save-dir', default=None)
     args = ap.parse_args()
 
-    save_dir = args.save_dir or os.environ.get('SINAL_RT_DIR') or r'D:\MarketData\mimo'
+    save_dir = args.save_dir or os.environ.get('SINAL_RT_DIR') or r'D:\MarketData\Profit'
     dia = args.dia or (date.today() - timedelta(days=1)).strftime('%Y%m%d')
 
-    out_dir = Path(save_dir) / f'parquet_{dia}'
-    out_dir.mkdir(exist_ok=True)
-
-    print(f'=== Conversao JSONL -> Parquet ===')
-    print(f'Dia: {dia}')
-    print(f'Source: {save_dir}')
-    print(f'Output: {out_dir}')
-
-    if not HAS_PYARROW and not HAS_PANDAS:
-        print('[ERRO] Nem pyarrow nem pandas instalados. Instale: pip install pyarrow pandas')
+    if not HAS_PYARROW:
+        print('[ERRO] PyArrow não instalado.')
         sys.exit(1)
 
+    print(f'=== Validação RAW Hive ===')
+    print(f'Dia: {dia}')
+    print(f'Source: {save_dir}')
+    print()
+
     total_registros = 0
-    total_parquets = 0
+    total_arquivos = 0
 
-    for tipo, prefix in [('negocios', 'raw_negocios_ms_'),
-                          ('book', 'raw_book_ms_'),
-                          ('rlp', 'raw_rlp_ms_')]:
-        files = find_jsonl_files(save_dir, dia, prefix)
+    for dt in ['TT', 'BOOK']:
+        files = find_hive_files(save_dir, dia_str=dia, data_type=dt)
         if not files:
-            print(f'\n[{tipo.upper()}] Nenhum arquivo encontrado para {dia}')
+            print(f'[{dt}] Nenhum arquivo encontrado')
             continue
 
-        print(f'\n[{tipo.upper()}] {len(files)} arquivo(s) encontrado(s)')
-        records = load_jsonl(files)
-        print(f'  Registros totais: {len(records)}')
-
-        if not records:
-            continue
-
-        by_ativo = split_by_ativo(records)
-        for ativo, regs in sorted(by_ativo.items()):
-            out_path = out_dir / f'{tipo}_{ativo}_{dia}.parquet'
+        print(f'\n[{dt}] {len(files)} arquivo(s)')
+        for f in files:
             try:
-                if HAS_PANDAS:
-                    save_parquet_pandas(regs, out_path)
-                else:
-                    save_parquet_pyarrow(regs, out_path)
-                size_mb = out_path.stat().st_size / (1024 * 1024)
-                print(f'  OK {ativo}: {len(regs)} registros -> {out_path.name} ({size_mb:.1f} MB)')
-                total_registros += len(regs)
-                total_parquets += 1
+                pf = pq.read_table(f)
+                n = len(pf)
+                # Extrair asset do caminho
+                parts = f.parts
+                asset_part = [p for p in parts if p.startswith('asset=')]
+                asset = asset_part[0].replace('asset=', '') if asset_part else '?'
+
+                # Extrair colunas
+                cols = pf.column_names
+
+                print(f'  {asset}: {n:>6} registros, {len(cols)} colunas → {f.name}')
+                total_registros += n
+                total_arquivos += 1
             except Exception as e:
-                print(f'  ERRO {ativo}: {e}')
+                print(f'  ERRO {f.name}: {e}')
 
     print(f'\n=== Resumo ===')
-    print(f'Total: {total_registros} registros -> {total_parquets} arquivos Parquet')
-    print(f'Diretório: {out_dir}')
-
-    return out_dir
+    print(f'Total: {total_registros} registros em {total_arquivos} arquivos Parquet')
 
 
 if __name__ == '__main__':

@@ -1,0 +1,633 @@
+Listagem de caminhos de pasta
+O número de série do volume é 4048-1442
+C:.
+|   .gitignore
+|   .watchdog.lock
+|   ajuste_diario_202608.csv
+|   auto_sync.py
+|   BASELINE.md
+|   captura_eventos_ms.py
+|   CHANGELOG_2026-08-28.md
+|   CHANGELOG_2026-08-28_FASES.md
+|   CHANGELOG_2026-08-28_v2.md
+|   config.json
+|   config.py
+|   dashboard_pro.html
+|   estrutura.txt
+|   feature_registry.json
+|   FEATURE_REGISTRY.md
+|   github.bat
+|   iniciar_auto_sync.bat
+|   Local)
+|   motor.zip
+|   motor_rt_alphaz.py
+|   motor_stdout_book.log
+|   motor_stdout_inst.log
+|   motor_stdout_inst2.log
+|   motor_stdout_inst3.log
+|   motor_v5_test.log
+|   motor_web.py
+|   poc_migration_tracker.py
+|   preco_context_tracker.py
+|   replay_engine.py
+|   retreinar_output.log
+|   returns_tracker.py
+|   run_all_tests.py
+|   run_ci.bat
+|   run_motor.py
+|   session_time_tracker.py
+|   test_report.json
+|   volatility_tracker.py
+|   volume_relativo_tracker.py
+|   walk_forward_v914_limpo.json
+|   walk_forward_v950.json
+|   watchdog.log
+|   watchdog.py
+|   
++---.freebuff
+|       desktop-v2.db
+|       motor13.err
+|       motor13.out
+|       motor_pregao.log
+|       motor_pregao.log.err
+|       motor_r2_err.log
+|       motor_r2_out.log
+|       motor_r3_err.log
+|       motor_r3_out.log
+|       motor_r4_err.log
+|       motor_r4_out.log
+|       motor_restart_err.log
+|       motor_restart_out.log
+|       project-id
+|       run.md
+|       
++---.pytest_cache
+|   |   .gitignore
+|   |   CACHEDIR.TAG
+|   |   README.md
+|   |   
+|   \---v
+|       \---cache
+|               lastfailed
+|               nodeids
+|               
++---.vscode
+|       extensions.json
+|       
++---adapters
+|   |   base.py
+|   |   com_watchdog.py
+|   |   dashboard_server.py
+|   |   file_storage.py
+|   |   profit_rtd.py
+|   |   replay.py
+|   |   rtd_connection.py
+|   |   rtd_parser.py
+|   |   rtd_writer.py
+|   |   __init__.py
+|   |   
+|   +---dashboard
+|   |   |   api.py
+|   |   |   handlers.py
+|   |   |   state.py
+|   |   |   __init__.py
+|   |   |   
+|   |   \---__pycache__
+|   |           api.cpython-314.pyc
+|   |           handlers.cpython-314.pyc
+|   |           state.cpython-314.pyc
+|   |           __init__.cpython-314.pyc
+|   |           
+|   \---__pycache__
+|           base.cpython-314.pyc
+|           com_watchdog.cpython-314.pyc
+|           dashboard_api.cpython-314.pyc
+|           dashboard_server.cpython-314.pyc
+|           file_storage.cpython-314.pyc
+|           profit_rtd.cpython-314.pyc
+|           replay.cpython-314.pyc
+|           rtd_connection.cpython-314.pyc
+|           rtd_parser.cpython-314.pyc
+|           rtd_writer.cpython-314.pyc
+|           __init__.cpython-314.pyc
+|           
++---alphaz
++---config
+|   |   defaults.py
+|   |   __init__.py
+|   |   
+|   \---__pycache__
+|           defaults.cpython-314.pyc
+|           __init__.cpython-314.pyc
+|           
++---core
+|   |   app.py
+|   |   calibration.py
+|   |   capture_daemon.py
+|   |   contracts.py
+|   |   decision_journal.py
+|   |   event_clock.py
+|   |   event_ordering.py
+|   |   leakage_test.py
+|   |   learning.py
+|   |   market_state.py
+|   |   metrics.py
+|   |   persistence.py
+|   |   position_manager.py
+|   |   regime_detector.py
+|   |   risk_engine.py
+|   |   risk_manager.py
+|   |   signal_engine.py
+|   |   temporal.py
+|   |   utils.py
+|   |   __init__.py
+|   |   
+|   \---__pycache__
+|           app.cpython-314.pyc
+|           calibration.cpython-314.pyc
+|           capture_daemon.cpython-314.pyc
+|           contracts.cpython-314.pyc
+|           decision_journal.cpython-314.pyc
+|           event_clock.cpython-314.pyc
+|           event_ordering.cpython-314.pyc
+|           leakage_test.cpython-314.pyc
+|           learning.cpython-314.pyc
+|           market_state.cpython-314.pyc
+|           metrics.cpython-314.pyc
+|           persistence.cpython-314.pyc
+|           position_manager.cpython-314.pyc
+|           regime_detector.cpython-314.pyc
+|           risk_engine.cpython-314.pyc
+|           risk_manager.cpython-314.pyc
+|           signal_engine.cpython-314.pyc
+|           temporal.cpython-314.pyc
+|           utils.cpython-314.pyc
+|           __init__.cpython-314.pyc
+|           
++---dados
+|       ablacao.json
+|       ajuste_diario_202608.csv
+|       auditoria_labeler.json
+|       auditoria_leakage.json
+|       relatorio_final.json
+|       robustez.json
+|       vwap_diaria_202608.parquet
+|       walk_forward_26_folds.json
+|       walk_forward_completo.json
+|       walk_forward_otimizado_result.json
+|       walk_forward_rigoroso.json
+|       walk_forward_v914_limpo.json
+|       walk_forward_v914_limpo.json.tmp
+|       walk_forward_v914_limpo.log
+|       walk_forward_v939.json
+|       wf_v939.json
+|       wf_v940.json
+|       wf_v950.json
+|       
++---docs
+|   |   API.md
+|   |   ARCHITECTURE.md
+|   |   ARCHITECTURE_COMPLETE.md
+|   |   ARCHITECTURE_ML_DECISION.md
+|   |   AUDITORIA_DASHBOARD.md
+|   |   AUDITORIA_INTEGRACAO.md
+|   |   AUDITORIA_INTEGRIDADE_TEMPORAL.md
+|   |   AUDITORIA_LABELS.md
+|   |   AUDITORIA_LEAKAGE.md
+|   |   AUDITORIA_LIVE.md
+|   |   AUDITORIA_MICROESTRUTURA.md
+|   |   AUDITORIA_ML.md
+|   |   AUDITORIA_PERFORMANCE.md
+|   |   AUDITORIA_PRODUCAO.md
+|   |   AUDITORIA_REDUNDANCIAS.md
+|   |   AUDITORIA_RTD.md
+|   |   AUDITORIA_TESTES.md
+|   |   batch_processor.py
+|   |   CHANGELOG.md
+|   |   COMPONENTS.md
+|   |   CONFIGURATION.md
+|   |   CORRECOES_AUDITORIA.md
+|   |   CORRECOES_END_TO_END.md
+|   |   CORRECOES_PIPELINE.md
+|   |   CORRECOES_TESTES.md
+|   |   dataset_100ms.jsonl
+|   |   DATA_CONTRACTS.md
+|   |   DATA_PIPELINE.md
+|   |   DECISIONS.md
+|   |   DOCUMENTATION_AUDIT.md
+|   |   DOCUMENTATION_REORGANIZATION_REPORT.md
+|   |   END_TO_END_TRACKING.md
+|   |   ESTADO_ATUAL.md
+|   |   EVOLUTION.md
+|   |   features
+|   |   FILE_INVENTORY.csv
+|   |   MACHINE_LEARNING.md
+|   |   MIGRATION_PLAN.md
+|   |   Motor
+|   |   OPEN_QUESTIONS.md
+|   |   OPERATIONS.md
+|   |   POLITICA_TEMPORAL.md
+|   |   RASTREAMENTO_FEATURES.md
+|   |   README.md
+|   |   RECOVERY_NOTES.md
+|   |   RELATORIO_FINAL.md
+|   |   REPLAY_USER_GUIDE.md
+|   |   RUNTIME.md
+|   |   TESTING.md
+|   |   TROUBLESHOOTING.md
+|   |   VALIDATION.md
+|   |   _gen_all.py
+|   |   
+|   +---archive
+|   |   |   AUDITORIA_FREEBUFF.md
+|   |   |   build_dataset_v940.py
+|   |   |   build_dataset_v950.py
+|   |   |   CAUSALITY_AUDIT.md
+|   |   |   DOCUMENTACAO_ALTERACOES.md
+|   |   |   DOCUMENTACAO_RECUPERADA_2026-08-26.md
+|   |   |   DOCUMENTACAO_TESTES.md
+|   |   |   METODOLOGIA_BACKTESTER.md
+|   |   |   motor_rt_alphaz_v9_legacy.py
+|   |   |   RASTREAMENTO_INTEGRACAO.md
+|   |   |   RELATORIO_REVISAO.md
+|   |   |   RELATORIO_VALIDACAO.md
+|   |   |   
+|   |   \---__pycache__
+|   |           build_dataset_v940.cpython-314.pyc
+|   |           build_dataset_v950.cpython-314.pyc
+|   |           motor_rt_alphaz_v9_legacy.cpython-314.pyc
+|   |           
+|   \---__pycache__
+|           batch_processor.cpython-314.pyc
+|           _gen_all.cpython-314.pyc
+|           
++---features
+|   |   book_features.py
+|   |   cross_asset.py
+|   |   ewma_zscore.py
+|   |   feature_engine.py
+|   |   feature_registry.py
+|   |   institutional_context.py
+|   |   kyle_lambda.py
+|   |   patterns.py
+|   |   percentil.py
+|   |   poc_migration.py
+|   |   price_context.py
+|   |   returns.py
+|   |   session_time.py
+|   |   trade_features.py
+|   |   utils.py
+|   |   volatility.py
+|   |   volume_profile.py
+|   |   volume_relativo.py
+|   |   vpin.py
+|   |   vwap_tracker.py
+|   |   __init__.py
+|   |   
+|   \---__pycache__
+|           book_features.cpython-314.pyc
+|           cross_asset.cpython-314.pyc
+|           ewma_zscore.cpython-314.pyc
+|           feature_engine.cpython-314.pyc
+|           feature_registry.cpython-314.pyc
+|           institutional_context.cpython-314.pyc
+|           kyle_lambda.cpython-314.pyc
+|           patterns.cpython-314.pyc
+|           percentil.cpython-314.pyc
+|           poc_migration.cpython-314.pyc
+|           price_context.cpython-314.pyc
+|           returns.cpython-314.pyc
+|           session_time.cpython-314.pyc
+|           trade_features.cpython-314.pyc
+|           utils.cpython-314.pyc
+|           volatility.cpython-314.pyc
+|           volume_profile.cpython-314.pyc
+|           volume_relativo.cpython-314.pyc
+|           vpin.cpython-314.pyc
+|           vwap_tracker.cpython-314.pyc
+|           __init__.cpython-314.pyc
+|           
++---ml
+|   |   ablation_test.py
+|   |   analisar_features.py
+|   |   analise_contextual_completa.py
+|   |   analise_redundancia.py
+|   |   batch_historico.py
+|   |   batch_processor.py
+|   |   calcular_ajuste_diario.py
+|   |   calcular_vwap_diaria.py
+|   |   calibrar_modelo.py
+|   |   comparar_contexto_preco.py
+|   |   dataset_builder.py
+|   |   diag_regime.py
+|   |   features_contexto_avancado.py
+|   |   features_contexto_preco.py
+|   |   features_expansao.py
+|   |   features_lib.py
+|   |   feature_ablation.py
+|   |   feature_cache.py
+|   |   feature_manifest.py
+|   |   importar_historico.py
+|   |   integrar_base.py
+|   |   labelar_offline.py
+|   |   labeler_core.py
+|   |   labeler_vectorizado.py
+|   |   lightgbm_tune.py
+|   |   metrics.py
+|   |   model_metadata.py
+|   |   model_registry.py
+|   |   model_validation.py
+|   |   replay_temporal.py
+|   |   retreinar_lgbm_limpo.py
+|   |   retreinar_otimizado.py
+|   |   run_labeler_completo.py
+|   |   scorer.py
+|   |   treino_lib.py
+|   |   validacao_rigorosa.py
+|   |   validar_contexto_preco.py
+|   |   validar_v914.py
+|   |   walk_forward.py
+|   |   walk_forward_completo.py
+|   |   walk_forward_otimizado.py
+|   |   walk_forward_v914_limpo.py
+|   |   __init__.py
+|   |   
+|   \---__pycache__
+|           ablation_test.cpython-314.pyc
+|           analisar_features.cpython-314.pyc
+|           analise_contextual_completa.cpython-314.pyc
+|           analise_redundancia.cpython-314.pyc
+|           batch_historico.cpython-314.pyc
+|           batch_processor.cpython-314.pyc
+|           build_dataset_v940.cpython-314.pyc
+|           build_dataset_v950.cpython-314.pyc
+|           calcular_ajuste_diario.cpython-314.pyc
+|           calcular_vwap_diaria.cpython-314.pyc
+|           calibrar_modelo.cpython-314.pyc
+|           comparar_contexto_preco.cpython-314.pyc
+|           dataset_builder.cpython-314.pyc
+|           diag_regime.cpython-314.pyc
+|           features_contexto_avancado.cpython-314.pyc
+|           features_contexto_preco.cpython-314.pyc
+|           features_expansao.cpython-314.pyc
+|           features_lib.cpython-314.pyc
+|           feature_ablation.cpython-314.pyc
+|           feature_cache.cpython-314.pyc
+|           feature_manifest.cpython-314.pyc
+|           importar_historico.cpython-314.pyc
+|           integrar_base.cpython-314.pyc
+|           labelar_offline.cpython-314.pyc
+|           labeler_core.cpython-314.pyc
+|           labeler_vectorizado.cpython-314.pyc
+|           lightgbm_tune.cpython-314.pyc
+|           metrics.cpython-314.pyc
+|           model_metadata.cpython-314.pyc
+|           model_registry.cpython-314.pyc
+|           model_validation.cpython-314.pyc
+|           replay_temporal.cpython-314.pyc
+|           retreinar_lgbm_limpo.cpython-314.pyc
+|           retreinar_otimizado.cpython-314.pyc
+|           run_labeler_completo.cpython-314.pyc
+|           scorer.cpython-314.pyc
+|           treino_lib.cpython-314.pyc
+|           validacao_rigorosa.cpython-314.pyc
+|           validar_contexto_preco.cpython-314.pyc
+|           validar_v914.cpython-314.pyc
+|           walk_forward.cpython-314.pyc
+|           walk_forward_completo.cpython-314.pyc
+|           walk_forward_otimizado.cpython-314.pyc
+|           walk_forward_v914_limpo.cpython-314.pyc
+|           __init__.cpython-314.pyc
+|           
++---scripts
+|   |   atualizar_documentacao.py
+|   |   auto_start.bat
+|   |   auto_sync.sh
+|   |   iniciar_motor.bat
+|   |   Local)
+|   |   observability.py
+|   |   parar_motor.bat
+|   |   pipeline_after_market.bat
+|   |   pipeline_diario.py
+|   |   relatorio_diario.py
+|   |   servidor_proxy_dashboard.py
+|   |   sync_local.bat
+|   |   verificar_importancia.py
+|   |   
+|   \---__pycache__
+|           atualizar_documentacao.cpython-314.pyc
+|           observability.cpython-314.pyc
+|           pipeline_diario.cpython-314.pyc
+|           relatorio_diario.cpython-314.pyc
+|           servidor_proxy_dashboard.cpython-314.pyc
+|           verificar_importancia.cpython-314.pyc
+|           
++---testes
+|   |   auditoria_dashboard.py
+|   |   auditoria_integridade_temporal.py
+|   |   auditoria_labels.py
+|   |   auditoria_labels_detalhada.py
+|   |   auditoria_leakage.py
+|   |   auditoria_leakage_v2.py
+|   |   auditoria_live.py
+|   |   auditoria_microestrutura.py
+|   |   auditoria_microstruktur.py
+|   |   auditoria_ml.py
+|   |   auditoria_ml_rapida.py
+|   |   auditoria_performance.py
+|   |   auditoria_redundancias.py
+|   |   auditoria_rtd.py
+|   |   auditoria_testes.py
+|   |   check_dashboard.py
+|   |   check_feat.py
+|   |   check_features.py
+|   |   check_files.py
+|   |   check_parquet.py
+|   |   check_periodo.py
+|   |   check_raw.py
+|   |   debug_labels.py
+|   |   fix_test.py
+|   |   fix_test2.py
+|   |   fix_test3.py
+|   |   import_check.py
+|   |   syntax_check.py
+|   |   testes_causalidade_v3.py
+|   |   test_atr_consistente.py
+|   |   test_b3_staleness.py
+|   |   test_book_split_edge_cases.py
+|   |   test_book_timestamp_sync.py
+|   |   test_book_writer.py
+|   |   test_capture_overflow.py
+|   |   test_com_watchdog.py
+|   |   test_config_flat.py
+|   |   test_contexto_avancado.py
+|   |   test_contexto_preco.py
+|   |   test_contracts_rollover.py
+|   |   test_dashboard_parity_ml.py
+|   |   test_deduplication_trades.py
+|   |   test_dedup_tt.py
+|   |   test_edge_case_book_split.py
+|   |   test_edge_case_scorer.py
+|   |   test_event_ordering.py
+|   |   test_features.py
+|   |   test_feature_parity_batch_live.py
+|   |   test_file_rotation_no_data_loss.py
+|   |   test_integracao_ponta_a_ponta.py
+|   |   test_labeler_invariants.py
+|   |   test_labeler_offline.py
+|   |   test_leakage_duracao_label.py
+|   |   test_leakage_preco_saida.py
+|   |   test_novas_features.py
+|   |   test_piramidacao.py
+|   |   test_queue_no_loss_on_overflow.py
+|   |   test_r2_aprendizado.py
+|   |   test_regime_reset_diario.py
+|   |   test_scorer.py
+|   |   test_session_boundary.py
+|   |   test_temporal.py
+|   |   test_timestamp_timezone.py
+|   |   test_tt_warmup.py
+|   |   test_vwap_causal.py
+|   |   update_dashboard.py
+|   |   validacao_correcoes.py
+|   |   verificacao_em_tempo_real.py
+|   |   __init__.py
+|   |   
+|   +---.pytest_cache
+|   |   |   .gitignore
+|   |   |   CACHEDIR.TAG
+|   |   |   README.md
+|   |   |   
+|   |   \---v
+|   |       \---cache
+|   |               nodeids
+|   |               
+|   \---__pycache__
+|           auditoria_dashboard.cpython-314.pyc
+|           auditoria_integridade_temporal.cpython-314.pyc
+|           auditoria_labels.cpython-314.pyc
+|           auditoria_labels_detalhada.cpython-314.pyc
+|           auditoria_leakage.cpython-314.pyc
+|           auditoria_leakage_v2.cpython-314.pyc
+|           auditoria_live.cpython-314.pyc
+|           auditoria_microestrutura.cpython-314.pyc
+|           auditoria_microstruktur.cpython-314.pyc
+|           auditoria_ml.cpython-314.pyc
+|           auditoria_ml_rapida.cpython-314.pyc
+|           auditoria_performance.cpython-314.pyc
+|           auditoria_redundancias.cpython-314.pyc
+|           auditoria_rtd.cpython-314.pyc
+|           auditoria_testes.cpython-314.pyc
+|           check_dashboard.cpython-314.pyc
+|           check_feat.cpython-314.pyc
+|           check_features.cpython-314.pyc
+|           check_files.cpython-314.pyc
+|           check_parquet.cpython-314.pyc
+|           check_periodo.cpython-314.pyc
+|           check_raw.cpython-314.pyc
+|           debug_labels.cpython-314.pyc
+|           fix_test.cpython-314-pytest-9.1.1.pyc
+|           fix_test.cpython-314.pyc
+|           fix_test2.cpython-314.pyc
+|           fix_test3.cpython-314.pyc
+|           import_check.cpython-314.pyc
+|           syntax_check.cpython-314.pyc
+|           testes_causalidade_v3.cpython-314.pyc
+|           test_atr_consistente.cpython-314-pytest-9.1.1.pyc
+|           test_atr_consistente.cpython-314.pyc
+|           test_b3_staleness.cpython-314-pytest-9.1.1.pyc
+|           test_b3_staleness.cpython-314.pyc
+|           test_book_split_edge_cases.cpython-314-pytest-9.1.1.pyc
+|           test_book_split_edge_cases.cpython-314.pyc
+|           test_book_timestamp_sync.cpython-314-pytest-9.1.1.pyc
+|           test_book_timestamp_sync.cpython-314.pyc
+|           test_book_writer.cpython-314-pytest-9.1.1.pyc
+|           test_book_writer.cpython-314.pyc
+|           test_capture_overflow.cpython-314-pytest-9.1.1.pyc
+|           test_com_watchdog.cpython-314-pytest-9.1.1.pyc
+|           test_com_watchdog.cpython-314.pyc
+|           test_config_flat.cpython-314-pytest-9.1.1.pyc
+|           test_config_flat.cpython-314.pyc
+|           test_contexto_avancado.cpython-314-pytest-9.1.1.pyc
+|           test_contexto_avancado.cpython-314.pyc
+|           test_contexto_preco.cpython-314-pytest-9.1.1.pyc
+|           test_contexto_preco.cpython-314.pyc
+|           test_contracts_rollover.cpython-314-pytest-9.1.1.pyc
+|           test_contracts_rollover.cpython-314.pyc
+|           test_dashboard_parity_ml.cpython-314-pytest-9.1.1.pyc
+|           test_dashboard_parity_ml.cpython-314.pyc
+|           test_deduplication_trades.cpython-314-pytest-9.1.1.pyc
+|           test_deduplication_trades.cpython-314.pyc
+|           test_dedup_tt.cpython-314-pytest-9.1.1.pyc
+|           test_edge_case_book_split.cpython-314-pytest-9.1.1.pyc
+|           test_edge_case_book_split.cpython-314.pyc
+|           test_edge_case_scorer.cpython-314-pytest-9.1.1.pyc
+|           test_edge_case_scorer.cpython-314.pyc
+|           test_event_ordering.cpython-314-pytest-9.1.1.pyc
+|           test_features.cpython-314-pytest-9.1.1.pyc
+|           test_features.cpython-314.pyc
+|           test_feature_parity_batch_live.cpython-314-pytest-9.1.1.pyc
+|           test_feature_parity_batch_live.cpython-314.pyc
+|           test_file_rotation_no_data_loss.cpython-314-pytest-9.1.1.pyc
+|           test_file_rotation_no_data_loss.cpython-314.pyc
+|           test_integracao_ponta_a_ponta.cpython-314-pytest-9.1.1.pyc
+|           test_integracao_ponta_a_ponta.cpython-314.pyc
+|           test_labeler_invariants.cpython-314-pytest-9.1.1.pyc
+|           test_labeler_invariants.cpython-314.pyc
+|           test_labeler_offline.cpython-314-pytest-9.1.1.pyc
+|           test_labeler_offline.cpython-314.pyc
+|           test_leakage_duracao_label.cpython-314-pytest-9.1.1.pyc
+|           test_leakage_duracao_label.cpython-314.pyc
+|           test_leakage_preco_saida.cpython-314-pytest-9.1.1.pyc
+|           test_leakage_preco_saida.cpython-314.pyc
+|           test_novas_features.cpython-314-pytest-9.1.1.pyc
+|           test_novas_features.cpython-314.pyc
+|           test_piramidacao.cpython-314-pytest-9.1.1.pyc
+|           test_queue_no_loss_on_overflow.cpython-314-pytest-9.1.1.pyc
+|           test_queue_no_loss_on_overflow.cpython-314.pyc
+|           test_r2_aprendizado.cpython-314-pytest-9.1.1.pyc
+|           test_r2_aprendizado.cpython-314.pyc
+|           test_regime_reset_diario.cpython-314-pytest-9.1.1.pyc
+|           test_regime_reset_diario.cpython-314.pyc
+|           test_scorer.cpython-314-pytest-9.1.1.pyc
+|           test_scorer.cpython-314.pyc
+|           test_session_boundary.cpython-314-pytest-9.1.1.pyc
+|           test_session_boundary.cpython-314.pyc
+|           test_temporal.cpython-314-pytest-9.1.1.pyc
+|           test_timestamp_timezone.cpython-314-pytest-9.1.1.pyc
+|           test_timestamp_timezone.cpython-314.pyc
+|           test_tt_warmup.cpython-314-pytest-9.1.1.pyc
+|           test_tt_warmup.cpython-314.pyc
+|           test_vwap_causal.cpython-314-pytest-9.1.1.pyc
+|           test_vwap_causal.cpython-314.pyc
+|           update_dashboard.cpython-314.pyc
+|           validacao_correcoes.cpython-314-pytest-9.1.1.pyc
+|           validacao_correcoes.cpython-314.pyc
+|           verificacao_em_tempo_real.cpython-314.pyc
+|           __init__.cpython-314.pyc
+|           
++---tests
+|   |   test_no_future_leakage.py
+|   |   
+|   \---__pycache__
+|           test_no_future_leakage.cpython-314-pytest-9.1.1.pyc
+|           test_no_future_leakage.cpython-314.pyc
+|           
+\---__pycache__
+        auto_sync.cpython-314.pyc
+        captura_eventos_ms.cpython-314.pyc
+        config.cpython-314.pyc
+        motor_rt_alphaz.cpython-314.pyc
+        motor_web.cpython-314.pyc
+        patch_02_verificar_unidade.cpython-314.pyc
+        poc_migration_tracker.cpython-314.pyc
+        preco_context_tracker.cpython-314.pyc
+        replay_engine.cpython-314.pyc
+        returns_tracker.cpython-314.pyc
+        run_all_tests.cpython-314.pyc
+        run_motor.cpython-314.pyc
+        session_time_tracker.cpython-314.pyc
+        volatility_tracker.cpython-314.pyc
+        volume_relativo_tracker.cpython-314.pyc
+        watchdog.cpython-314.pyc
+        

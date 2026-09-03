@@ -24,3 +24,9 @@ class VolatilityTracker:
 
     def snapshot(self):
         return {f"vol_{k}": round(v, 6) for k, v in self._ews.items()}
+
+    def reset_diario(self):
+        """v12.2: Reset diário para evitar acúmulo entre dias."""
+        self._buf = []
+        for n, nome in _WINDOWS:
+            self._ews[nome] = 0.0

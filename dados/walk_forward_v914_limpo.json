@@ -1,5 +1,5 @@
 {
-  "descricao": "Walk-forward limpo labels v9.14 (v9.20, v9.32 = dataset enriquecido)",
+  "descricao": "Walk-forward OTIMIZADO v9.38 (n_jobs=-1, cache, float32, baselines vetorizados)",
   "dataset": "D:/MarketData/mimo/26/dataset_final_completo.parquet",
   "modelo": "LightGBM",
   "features": 26,
@@ -8,6 +8,7 @@
   "purge_s": 30,
   "embargo_s": 30,
   "target": "binario TP-vs-nao-TP",
+  "tempo_total_s": 461.6,
   "folds": [
     {
       "fold": 1,
@@ -69,12 +70,13 @@
       },
       "baseline_momentum": {
         "n_trades": 131010,
-        "total_pts": 147913242.0,
-        "expectancy": 1129.0225,
+        "total_pts": 147913248.0,
+        "expectancy": 1129.0226,
         "pf": 228.3018,
         "winrate": 0.0066,
-        "dd_pts": -4345.0
-      }
+        "dd_pts": -6488.0
+      },
+      "tempo_fold_s": 64.36
     },
     {
       "fold": 2,
@@ -121,8 +123,8 @@
       },
       "baseline_threshold0": {
         "n_trades": 435030,
-        "total_pts": 573666662.03,
-        "expectancy": 1318.683,
+        "total_pts": 573666688.0,
+        "expectancy": 1318.6831,
         "pf": 266.7956,
         "winrate": 0.0077,
         "dd_pts": -3395.0
@@ -137,12 +139,13 @@
       },
       "baseline_momentum": {
         "n_trades": 126790,
-        "total_pts": 160344158.15,
+        "total_pts": 160344160.0,
         "expectancy": 1264.6436,
         "pf": 255.8219,
         "winrate": 0.0074,
-        "dd_pts": -5820.0
-      }
+        "dd_pts": -9312.0
+      },
+      "tempo_fold_s": 64.97
     },
     {
       "fold": 3,
@@ -190,7 +193,7 @@
       },
       "baseline_threshold0": {
         "n_trades": 477070,
-        "total_pts": 564309503.5,
+        "total_pts": 564309504.0,
         "expectancy": 1182.8652,
         "pf": 239.2616,
         "winrate": 0.0071,
@@ -206,12 +209,13 @@
       },
       "baseline_momentum": {
         "n_trades": 139330,
-        "total_pts": 150139505.0,
+        "total_pts": 150139504.0,
         "expectancy": 1077.582,
         "pf": 217.916,
         "winrate": 0.0065,
-        "dd_pts": -5390.0
-      }
+        "dd_pts": -8624.0
+      },
+      "tempo_fold_s": 71.04
     },
     {
       "fold": 4,
@@ -260,11 +264,11 @@
       },
       "baseline_threshold0": {
         "n_trades": 469460,
-        "total_pts": 561955933.5,
+        "total_pts": 561955968.0,
         "expectancy": 1197.0262,
-        "pf": 242.1518,
+        "pf": 242.1517,
         "winrate": 0.0072,
-        "dd_pts": -1000.0
+        "dd_pts": -1600.0
       },
       "baseline_aleatorio30": {
         "n_trades": 0,
@@ -276,12 +280,13 @@
       },
       "baseline_momentum": {
         "n_trades": 141690,
-        "total_pts": 192686277.5,
+        "total_pts": 192686272.0,
         "expectancy": 1359.9144,
         "pf": 275.2377,
         "winrate": 0.0082,
-        "dd_pts": -3745.0
-      }
+        "dd_pts": -4232.0
+      },
+      "tempo_fold_s": 41.98
     },
     {
       "fold": 5,
@@ -331,9 +336,9 @@
       },
       "baseline_threshold0": {
         "n_trades": 460290,
-        "total_pts": 555044475.5,
-        "expectancy": 1205.8582,
-        "pf": 243.9531,
+        "total_pts": 555044480.0,
+        "expectancy": 1205.8583,
+        "pf": 243.953,
         "winrate": 0.0073,
         "dd_pts": -3745.0
       },
@@ -347,12 +352,13 @@
       },
       "baseline_momentum": {
         "n_trades": 134690,
-        "total_pts": 153897467.0,
+        "total_pts": 153897472.0,
         "expectancy": 1142.605,
         "pf": 231.1202,
         "winrate": 0.0069,
-        "dd_pts": -6535.0
-      }
+        "dd_pts": -7760.0
+      },
+      "tempo_fold_s": 99.07
     },
     {
       "fold": 6,
@@ -403,11 +409,11 @@
       },
       "baseline_threshold0": {
         "n_trades": 478190,
-        "total_pts": 551982319.5,
+        "total_pts": 551982336.0,
         "expectancy": 1154.3159,
         "pf": 233.5086,
         "winrate": 0.0071,
-        "dd_pts": -1000.0
+        "dd_pts": -1600.0
       },
       "baseline_aleatorio30": {
         "n_trades": 0,
@@ -419,12 +425,13 @@
       },
       "baseline_momentum": {
         "n_trades": 146980,
-        "total_pts": 148494192.5,
-        "expectancy": 1010.302,
+        "total_pts": 148494208.0,
+        "expectancy": 1010.3021,
         "pf": 204.3206,
         "winrate": 0.0062,
-        "dd_pts": -4830.0
-      }
+        "dd_pts": -5408.0
+      },
+      "tempo_fold_s": 41.1
     },
     {
       "fold": 7,
@@ -476,7 +483,7 @@
       },
       "baseline_threshold0": {
         "n_trades": 650130,
-        "total_pts": 558139934.5,
+        "total_pts": 558139904.0,
         "expectancy": 858.5051,
         "pf": 173.6061,
         "winrate": 0.0052,
@@ -496,8 +503,9 @@
         "expectancy": 203.0604,
         "pf": 41.6634,
         "winrate": 0.0013,
-        "dd_pts": -29005.0
-      }
+        "dd_pts": -28850.0
+      },
+      "tempo_fold_s": 61.11
     }
   ]
 }

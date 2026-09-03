@@ -442,7 +442,12 @@ class ModelDecisionSeparator:
                 'cost_adjusted': abs(calibrated_prob - 0.5) >= min_edge,
             }
         }
-    
+
+    def update(self, predicted_prob: float, actual_outcome: int, regime: str = 'lateral'):
+        """Delega atualização ao calibrador interno."""
+        if self.calibrator and hasattr(self.calibrator, 'update'):
+            self.calibrator.update(predicted_prob, actual_outcome, regime)
+
     def save(self, path: str):
         """Salva estado do calibrador."""
         data = {

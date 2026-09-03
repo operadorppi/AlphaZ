@@ -62,3 +62,10 @@ class PocMigrationTracker:
             'dist_preco_poc': round(dist, 2),
             'preco_acima_poc': acima,
         }
+
+    def reset_diario(self):
+        """v12.2: Reset diário para evitar acúmulo entre dias."""
+        self._poc_anterior = None
+        self._poc_atual = None
+        self._poc_historico = []
+        self._preco_anterior = None

@@ -26,6 +26,10 @@ class VolumeProfileTracker:
         self.volumes = {}
         self.delta = {}
 
+    def reset_diario(self):
+        """v12.2: Reset diário para evitar acúmulo entre dias."""
+        self.reset()
+
     def calcular(self, preco_atual):
         if not self.volumes or preco_atual <= 0:
             return {'poc_dist': 0, 'vah_dist': 0, 'val_dist': 0,

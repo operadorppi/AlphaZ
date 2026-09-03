@@ -352,4 +352,24 @@ D5: Dashboard HTML puro (sem framework)
 D6: Captura em JSONL (nao Parquet)
   Justificativa: append-only, tolerante a crashes
 
-D7: Sem dedup 
+D7: Sem dedup
+  Justificativa: RTD nao envia duplicados
+
+D8: CaptureDaemon imortal (v11.0)
+  Justificativa: dados sobrevivem crash do motor
+
+D9: Arquitetura em camadas (v10.0)
+  Justificativa: manutenibilidade, testabilidade
+
+D10: ML como gate, heuristica como confirmacao (v11.13)
+  Justificativa: ML mal calibrado (ECE 0.263), heuristica da direcao
+"""
+
+if __name__ == '__main__':
+    print(f"Gerando {len(files)} docs...")
+    for name, content in files.items():
+        path = os.path.join('docs', name)
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(content)
+        print(f"  {name}")
+    print("Done.") 

@@ -7,7 +7,7 @@ import logging
 import time
 import threading
 from http.server import ThreadingHTTPServer
-from adapters.dashboard_api import DashboardAPI
+from adapters.dashboard.api import DashboardAPI
 
 log = logging.getLogger(__name__)
 
@@ -39,6 +39,9 @@ class DashboardServer:
                     'saldo_corretoras': app.get_saldo_corretoras(),
                     'padroes': app.market_state.padroes.get_resumo(),
                     'ml_health': app.scorer.estado_salud() if app.scorer else {},
+                    'book_level': app.get_book_level(),
+                    'rtd_health': app.get_rtd_health() if hasattr(app, 'get_rtd_health') else {},
+                    'capture_health': app.get_capture_health() if hasattr(app, 'get_capture_health') else {},
                 }
                 DashboardAPI._snapshot_ts = time.time()
             except Exception:

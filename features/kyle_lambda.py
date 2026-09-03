@@ -18,6 +18,10 @@ class KyleLambdaTracker:
         self._dp = []
         self._ultimo_preco = None
 
+    def reset_diario(self):
+        """v12.2: Reset diário para evitar acúmulo entre dias."""
+        self.reset()
+
     def atualizar(self, preco, qtd, agressor):
         if preco <= 0:
             return

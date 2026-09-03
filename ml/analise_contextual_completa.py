@@ -18,10 +18,16 @@ EXCL = ['label','ts_ms','outcome','duracao_label_ms','duracao_ms','preco_entrada
 MICRO = [c for c in df.columns if c not in EXCL and df[c].dtype in ['float64','int64']]
 print(f'  Micro features: {len(MICRO)}')
 print('[2/6] Adicionando contexto...')
-from features_contexto_preco import adicionar_contexto_preco
-from features_expansao import adicionar_expansao
-df = adicionar_contexto_preco(df)
-df = adicionar_expansao(df)
+from ml.features_contexto_preco import adicionar_contexto_preco
+from ml.features_expansao import adicionar_expansao
+try:
+    df = adicionar_contexto_preco(df)
+except KeyError as e:
+    print(f'  Warning: Missing column {e}, skipping contexto_preco')
+try:
+    df = adicionar_expansao(df)
+except Exception as e:
+    print(f'  Warning: expansao failed: {e}')
 CTX = [c for c in df.columns if c not in MICRO + EXCL and df[c].dtype in ['float64','int64']]
 print(f'  Contexto features: {len(CTX)}')
 ALL = MICRO + CTX

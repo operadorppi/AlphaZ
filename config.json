@@ -1,78 +1,66 @@
 {
-    "base_dir": "D:\\MarketData\\Profit",
-    "save_dir": "D:\\MarketData\\mimo",
-    "ml_modelo": "D:\\MarketData\\mimo\\26\\modelo_lgbm_v5_otimizado.pkl",
-    "ml_threshold": 0.6,
-    "web": {
-        "host": "127.0.0.1",
-        "port": 5001
-    },
+    "environment": "DEVELOPMENT",
+    "ml_required": false,
+    "fallback_enabled": true,
+    "require_replay_validated": false,
+    "max_drawdown_dia": 0.02,
+    "label": "freebuff-config",
+    "ml_modelo": "",
+    "web_host": "127.0.0.1",
+    "web_port": 5001,
+    "save_intervalo": 60,
     "ativos": [
         "WINV26",
+        "WDOV26",
         "INDV26",
-        "WDOU26",
-        "DOLU26"
-    ],
-    "ativo_principal": "WINV26",
-    "ativo_contexto": "WDOU26",
-    "cross_asset_pairs": [
-        ["WINV26", "INDV26"],
-        ["WDOU26", "DOLU26"]
+        "DOLV26"
     ],
     "rtd": {
         "book_linhas": 500,
-        "tt_linhas": 500,
-        "poll_s": 0.02,
-        "max_janelas": 12
+        "tt_linhas": 100,
+        "poll_s": 0.001,
+        "event_pump_s": 0.005
     },
-    "trading": {
-        "tp_pts": 100,
-        "sl_pts": 50,
-        "max_holding_s": 0,
-        "max_trades_dia": 15,
-        "max_drawdown_dia": -300,
-        "custo_execucao": {
-            "WIN": 5.0,
-            "WDO": 1.0,
-            "IND": 5.0,
-            "DOL": 1.0
+    "tick_values": {
+        "WIN": 0.2,
+        "IND": 1.0,
+        "WDO": 5.0,
+        "DOL": 125.0
+    },
+    "lotes_minimos": {
+        "WIN": 1,
+        "IND": 5,
+        "WDO": 1,
+        "DOL": 5
+    },
+    "nominal_formula": {
+        "WIN": {
+            "tipo": "pontos",
+            "multiplier": 0.2,
+            "divisor": 1
+        },
+        "IND": {
+            "tipo": "pontos",
+            "multiplier": 5,
+            "divisor": 1
+        },
+        "WDO": {
+            "tipo": "dolar",
+            "nominal_usd": 10000,
+            "divisor": 1000
+        },
+        "DOL": {
+            "tipo": "dolar",
+            "nominal_usd": 250000,
+            "divisor": 1000
         }
     },
-    "circuit_breaker": {
-        "nivel1_perdas": 3,
-        "nivel1_pnl": -100,
-        "nivel2_perdas": 5,
-        "nivel2_pnl": -300,
-        "nivel3_perdas": 7,
-        "nivel3_pnl": -500
+    "max_exposure_brl": {
+        "WIN": 200000,
+        "IND": 2000000,
+        "WDO": 100000,
+        "DOL": 3000000
     },
-    "desligar_horarios_ruins": false,
-    "normalizar_score": false,
-    "horarios": {
-        "abertura_fim": [
-            9,
-            0
-        ],
-        "almoco_inicio": [
-            99,
-            0
-        ],
-        "almoco_fim": [
-            99,
-            0
-        ],
-        "fechamento": [
-            18,
-            30
-        ]
-    },
-    "aprendizado": {
-        "delta": 0.02,
-        "decay": 0.998,
-        "min_amostras": 5
-    },
-    "position_sizing": {
-        "target_risk_per_trade": 60,
-        "max_position_size": 10
-    }
+    "ativo_principal": "WINV26",
+    "ativo_contexto": "WDOV26"
 }

@@ -72,15 +72,27 @@ def _ler_negocios_hive(base, data_str):
     ts_max = None
     book_snaps = 0
 
+    # v14.6: usar read_metadata para contagem rapida (100x mais rapido)
+    # Sampling: ler apenas 1 arquivo por ativo para timestamp + ativo stats
+    assets_seen = {}
+    sample_per_asset = {}
     for tf in tt_files:
         try:
-            t = pq.read_table(tf)
-            rows = t.num_rows
+            meta = pq.read_metadata(tf)
+            rows = meta.num_rows
             negocios += rows
-            ativos = t.column('ativo').to_pylist()
-            for a in ativos:
-                por_ativo[a] = por_ativo.get(a, 0) + 1
-            # ts_ns -> ts_ms
+            # Extrair nome do asset do path (asset=WIN)
+            asset = tf.split('asset=')[1].split('/')[0] if 'asset=' in tf else 'UNKNOWN'
+            por_ativo[asset] = por_ativo.get(asset, 0) + rows
+            # Amostra: 1 arquivo por asset para timestamps
+            if asset not in sample_per_asset:
+                sample_per_asset[asset] = tf
+        except Exception:
+            continue
+    # Ler timestamps de 1 arquivo por asset
+    for asset, tf in sample_per_asset.items():
+        try:
+            t = pq.read_table(tf, columns=['ts_ns'])
             ts_col = t.column('ts_ns').to_pylist()
             for ts_ns in ts_col:
                 ts_ms = ts_ns // 1_000_000 if ts_ns and ts_ns > 1e15 else ts_ns
@@ -92,7 +104,7 @@ def _ler_negocios_hive(base, data_str):
 
     for bf in book_files:
         try:
-            book_snaps += pq.read_table(bf).num_rows
+            book_snaps += pq.read_metadata(bf).num_rows
         except Exception:
             continue
 

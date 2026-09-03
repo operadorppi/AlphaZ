@@ -68,3 +68,12 @@ $RECYCLE.BIN/
 
 # Venv local de validação de artefato (CI build job)
 .ci_venv/
+
+# Lixo local / caches / dados grandes (v14.8 sync)
+.watchdog.lock
+.pt_x1/
+.pt_x2/
+.freebuff/
+alphaz/
+dados/*.parquet
+* - Copia.*

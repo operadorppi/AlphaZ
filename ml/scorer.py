@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-scorer.py — Motor de Inferência ML (v10.1).
+scorer.py — Motor de Inferência ML (v12.0).
 
 Responsável por transformar eventos de mercado em probabilidades através
 de um modelo pré-treinado. Mantém paridade total de features com a 
@@ -11,17 +11,21 @@ Histórico de Versões:
   - v9.32: Inclusão de VWAP intraday causal e ajuste D-1.
   - v9.19: Adicionada observabilidade para falhas de predição (P0-5).
   - v10.2: Camada completa de contexto (POC, VolRel, Intermarket, Distâncias).
+  - v12.0: Sincronização completa com batch — adiciona 25 features de regime,
+           ATR, volatilidade expandida, e interações micro×contexto.
 
 Atribuições:
   - Manutenção de trackers de features (VWAP, Volatilidade, Contexto).
   - Normalização e achatamento de snapshots (flatten).
   - Execução do modelo (inference).
   - Diagnóstico de saúde do motor ML.
+  - Cálculo de features de regime e ATR (sincronizadas com batch v950).
 """
 import logging
 import os
 import pickle
 import time
+import math
 import numpy as np
 import pandas as pd
 from ml.features_lib import GeradorJanelas
@@ -39,13 +43,161 @@ from ml.feature_manifest import FeatureManifest
 
 log = logging.getLogger('scorer')
 
-class ScorerML:
-    """Scorer ML com features de microestrutura + VWAP + ajuste oficial.
 
+class RegimeTracker:
+    """Calcula features de regime de mercado sincronizadas com o batch v950.
+    
+    Features calculadas:
+    - regime_realiz_vol: EWMA de volatilidade realizada (curto vs longo)
+    - regime_realiz_vol_bps: volatilidade em bps
+    - regime_vol_zscore: z-score da volatilidade
+    - regime_aggr_persistencia: EWMA suave do aggr_imb
+    - regime_cvd_aceleracao: aceleração do CVD
+    - regime_range_dia_norm: range do dia normalizado
+    - regime_pos_vs_vwap: posição relativa vs VWAP
+    - regime_pos_vs_ajuste: posição relativa vs ajuste
+    """
+    
+    def __init__(self):
+        self._precos = []  # buffer de preços
+        self._cvd_total = 0.0
+        self._cvd_history = []  # últimos 300 valores de CVD
+        self._maxima_dia = None
+        self._minima_dia = None
+        self._volta_dia = None
+        self._ultimo_ts = None
+        self._ultimo_dia = None
+        self._vwap_value = None  # v12.1: VWAP atual para regime_pos_vs_vwap
+        
+        # EWMA para volatilidade
+        self._vol_ewma_curto = 0.0
+        self._vol_ewma_longo = 0.0
+        self._vol_ewma_2x = 0.0  # EWMA da EWMA (para z-score)
+        
+        # EWMA para aggr_imb
+        self._aggr_ewma = 0.0
+        
+        # Contadores
+        self._n_updates = 0
+    
+    def _dia_brt(self, ts_ms):
+        return (int(ts_ms) - 3 * 3600 * 1000) // 86_400_000
+    
+    def reset_diario(self):
+        """Reseta estado para novo dia."""
+        self._maxima_dia = None
+        self._minima_dia = None
+        self._volta_dia = None
+        self._vwap_value = None  # v12.1: reset VWAP também
+        self._vol_ewma_curto = 0.0
+        self._vol_ewma_longo = 0.0
+        self._vol_ewma_2x = 0.0
+        self._aggr_ewma = 0.0
+        self._n_updates = 0
+        self._cvd_history = []
+    
+    def update(self, ts_ms, preco, vol_pts, aggr_imb, cvd_total, vwap):
+        """Atualiza tracker com novo dado."""
+        dia = self._dia_brt(ts_ms)
+        if self._ultimo_dia is not None and dia != self._ultimo_dia:
+            self.reset_diario()
+        self._ultimo_dia = dia
+        
+        self._n_updates += 1
+        
+        # Atualizar máxima/mínima do dia
+        if preco > 0:
+            if self._maxima_dia is None or preco > self._maxima_dia:
+                self._maxima_dia = preco
+            if self._minima_dia is None or preco < self._minima_dia:
+                self._minima_dia = preco
+            self._volta_dia = preco
+            self._vwap_value = vwap  # v12.1: guardar VWAP para regime_pos_vs_vwap
+        
+        # Volatilidade realizada (abs delta preço)
+        # v12.1: Unificar alphas com batch (features_contexto_avancado.py)
+        # Batch usa: alpha_curto=0.005 (janela ~200 ticks), alpha_longo=0.01
+        if len(self._precos) > 0:
+            ret = abs(preco - self._precos[-1])
+            alpha_curto = 0.005  # UNIFICADO: mesmo alpha do batch v950
+            alpha_longo = 0.01
+            self._vol_ewma_curto = alpha_curto * ret + (1 - alpha_curto) * self._vol_ewma_curto
+            self._vol_ewma_longo = alpha_longo * ret + (1 - alpha_longo) * self._vol_ewma_longo
+            self._vol_ewma_2x = alpha_longo * self._vol_ewma_curto + (1 - alpha_longo) * self._vol_ewma_2x
+        
+        self._precos.append(preco)
+        if len(self._precos) > 1600:
+            self._precos = self._precos[-1500:]
+        
+        # Atualizar CVo history para aceleração
+        self._cvd_history.append(cvd_total)
+        if len(self._cvd_history) > 300:
+            self._cvd_history = self._cvd_history[-300:]
+        
+        # EWMA do aggr_imb
+        if aggr_imb is not None:
+            self._aggr_ewma = 0.05 * aggr_imb + (1 - 0.05) * self._aggr_ewma
+    
+    def snapshot(self):
+        """Retorna features de regime calculadas."""
+        result = {}
+        
+        # regime_realiz_vol: ratio vol curto/longo (expansão/compressão)
+        if self._vol_ewma_longo > 1e-9:
+            result['regime_realiz_vol'] = self._vol_ewma_curto / self._vol_ewma_longo
+        else:
+            result['regime_realiz_vol'] = 1.0
+        
+        # regime_realiz_vol_bps: volatilidade em bps
+        if self._volta_dia and self._volta_dia > 0:
+            result['regime_realiz_vol_bps'] = self._vol_ewma_curto / self._volta_dia * 10000
+        else:
+            result['regime_realiz_vol_bps'] = 0.0
+        
+        # regime_vol_zscore: z-score da vol (vol de vol)
+        if self._vol_ewma_2x > 1e-9 and self._vol_ewma_longo > 1e-9:
+            result['regime_vol_zscore'] = (self._vol_ewma_curto - self._vol_ewma_longo) / self._vol_ewma_longo
+        else:
+            result['regime_vol_zscore'] = 0.0
+        
+        # regime_aggr_persistencia: EWMA suave do aggr_imb
+        result['regime_aggr_persistencia'] = self._aggr_ewma
+        
+        # regime_cvd_aceleracao: (cvd[t] - cvd[t-300]) / 300
+        if len(self._cvd_history) >= 300:
+            result['regime_cvd_aceleracao'] = (self._cvd_history[-1] - self._cvd_history[0]) / 300.0
+        else:
+            result['regime_cvd_aceleracao'] = 0.0
+        
+        # regime_range_dia_norm: (max - min) / vol_ref
+        if self._maxima_dia and self._minima_dia and self._volta_dia:
+            range_dia = self._maxima_dia - self._minima_dia
+            vol_ref = max(self._vol_ewma_curto, 1.0)
+            result['regime_range_dia_norm'] = range_dia / vol_ref
+        else:
+            result['regime_range_dia_norm'] = 0.0
+        
+        # regime_pos_vs_vwap: posição relativa vs VWAP
+        # Usa o vwap_value passado no update() (não self._volta_dia)
+        if hasattr(self, '_vwap_value') and self._vwap_value and self._vwap_value > 0:
+            result['regime_pos_vs_vwap'] = (self._volta_dia - self._vwap_value) / max(self._vol_ewma_curto, 1.0) if self._volta_dia else 0.0
+        else:
+            result['regime_pos_vs_vwap'] = 0.0
+        
+        # regime_pos_vs_ajuste: será preenchido externamente
+        result['regime_pos_vs_ajuste'] = 0.0
+        
+        return result
+
+
+class ScorerML:
+    """Scorer ML com features de microestrutura + VWAP + ajuste oficial + regime.
+    
     O scorer recebe eventos TT (negocios) e snapshots de book, mantem o
     estado do features_lib (GeradorJanelas) e adiciona:
       - VWAP intraday causal (VWAPTracker por ativo)
       - ajuste_anterior_oficial (carregado de uma tabela D-1)
+      - Features de regime (RegimeTracker) sincronizadas com batch v950
     """
 
     def __init__(self, caminho_modelo, instrumentos,
@@ -89,6 +241,7 @@ class ScorerML:
         self.ultimo_fallo_ts = None
         self.ultimo_ok_ts = None
         self.ultimo_error = None
+        self._ece = 0.0  # v12.2: ECE tracking para fallback
 
         # v9.33: indice da classe 1 (TP) no predict_proba
         # Modelo tem classes_ = [-1, 0, 1] ou [0, 1] — encontramos o indice de 1
@@ -130,8 +283,15 @@ class ScorerML:
 
         # estado do dia atual (para detectar virada de dia)
         self._ultimo_dia = {}  # contrato -> dia atual
-        # estado do VWAP por contrato (map: contrato -> VWAPTracker)
-        # ja criado em self.vwaps
+        self._prev_preco = {}  # v12.2: preco anterior por ativo (para calcular vol_pts)
+        
+        # v12.0: Regime tracker por ativo
+        self.regime = {a: RegimeTracker() for a in instrumentos}
+
+        # v12.0: ATR tracker por ativo
+        self._atr_alpha = 2.0 / 15.0  # ~14-period EMA
+        self._atr_values = {a: 0.0 for a in instrumentos}
+        self._atr_prev = {a: None for a in instrumentos}
 
         self._log_importancia_l500()
 
@@ -156,6 +316,26 @@ class ScorerML:
         if self._ultimo_dia.get(ativo) == dia:
             return
         self._ultimo_dia[ativo] = dia
+        
+        # v12.2: Reset diário de todos os trackers
+        if ativo in self.vps:
+            self.vps[ativo].reset_diario()
+        if ativo in self.mig:
+            self.mig[ativo].reset_diario()
+        if ativo in self.vrels:
+            self.vrels[ativo].reset_diario()
+        if ativo in self.vol:
+            self.vol[ativo].reset_diario()
+        if ativo in self.ret:
+            self.ret[ativo].reset_diario()
+        if ativo in self.vwaps:
+            self.vwaps[ativo].reset_diario()
+        if ativo in self.regime:
+            self.regime[ativo].reset_diario()
+        
+        # Reset ATR
+        self._atr_values[ativo] = 0.0
+        self._atr_prev[ativo] = None
         # calcular data_anterior = dia - 1
         from datetime import date, timedelta
         d = date(1970, 1, 1) + timedelta(days=dia)
@@ -169,6 +349,10 @@ class ScorerML:
                 ajuste_ant = tabela[k]
                 break
         self.ajuste_anterior_oficial[ativo] = ajuste_ant
+        
+        # Reset regime tracker para novo dia
+        if ativo in self.regime:
+            self.regime[ativo].reset_diario()
 
     def evento(self, ativo, ts_ms, preco, qtd, agressor, compradora, vendedora):
         snaps = self.gerador.processar_evento(ativo, ts_ms, preco, qtd, agressor,
@@ -201,6 +385,19 @@ class ScorerML:
         self.session_time.update(ts_ms)
         # atualizar ajuste oficial D-1
         self._atualizar_ajuste_para_dia(ativo, ts_ms)
+        
+        # v12.0: Atualizar regime tracker
+        if ativo in self.regime:
+            # Calcular vol_pts como delta do preço
+            self._prev_preco = self._prev_preco or {}
+            prev_preco = self._prev_preco.get(ativo)
+            vol_pts = abs(preco - prev_preco) if prev_preco is not None else 0.0
+            self._prev_preco[ativo] = preco
+            
+            # Obter aggr_imb e cvd do snapshot (será usado em _prever)
+            self.regime[ativo].update(ts_ms, preco, vol_pts, 0.0, 0.0, 
+                                     self.vwaps[ativo].vwap if ativo in self.vwaps else None)
+        
         self._consumir(snaps)
 
     def book(self, ativo, ts_ms, snap):
@@ -272,17 +469,71 @@ class ScorerML:
             row['aproximando_vwap'] = float(d_vwap < prev_d_vwap)
             row['afastando_vwap'] = float(d_vwap > prev_d_vwap)
             self._prev_dist_vwap[ativo] = d_vwap
+            
+            # VWAP inclinação (v12.1: sincronizado com batch)
+            # Batch calcula em: features_contexto_avancado.py:393-396
+            # vwap_inclinacao_1m = (vwap[t] - vwap[t-600]) / vwap[t-600]
+            # vwap_inclinacao_5m = (vwap[t] - vwap[t-3000]) / vwap[t-3000]
+            if not hasattr(self, '_vwap_history'):
+                self._vwap_history = {}
+            if ativo not in self._vwap_history:
+                self._vwap_history[ativo] = []
+            vwap_val = v_data.get('vwap', 0.0)
+            if vwap_val > 0:
+                self._vwap_history[ativo].append(vwap_val)
+                if len(self._vwap_history[ativo]) > 3000:
+                    self._vwap_history[ativo] = self._vwap_history[ativo][-2500:]
+                
+                hist = self._vwap_history[ativo]
+                if len(hist) >= 600:
+                    row['vwap_inclinacao_1m'] = (vwap_val - hist[-600]) / max(hist[-600], 1.0)
+                else:
+                    row['vwap_inclinacao_1m'] = 0.0
+                if len(hist) >= 3000:
+                    row['vwap_inclinacao_5m'] = (vwap_val - hist[-3000]) / max(hist[-3000], 1.0)
+                else:
+                    row['vwap_inclinacao_5m'] = 0.0
 
         # 4. Intermarket (WIN x WDO)
         row.update(self.inter.calcular())
         
         row.update(self.session_time.snapshot(ts_ms))
 
-        # 5. Interações Sugeridas (Seção 16)
-        if 'aggr_imb' in row and 'dist_vwap_norm' in row:
-            row['inter_aggr_vwap'] = row['aggr_imb'] * row['dist_vwap_norm']
-        if 'dist_preco_poc' in row and 'vol_1s' in row:
-            row['inter_poc_vol'] = row['dist_preco_poc'] * row['vol_1s']
+        # 5. Interações Sugeridas (Seção 16) — SINCRONIZADAS COM BATCH v950
+        # Todas as 13 interações do batch devem ser calculadas no live também.
+        # Batch calcula em: ml/features_contexto_avancado.py:adicionar_interacoes_micro_contexto
+        
+        aggr = row.get('aggr_imb', 0.0)
+        cvd = row.get('cvd_total', 0.0)
+        imb5 = row.get('imb_L5', 0.0)
+        vol = row.get('_vol_pts', 0.0)
+        
+        dist_vwap = row.get('dist_vwap_pts', 0.0)
+        dist_ajuste = row.get('dist_ajuste_oficial_pts', 0.0)
+        acima_vwap = row.get('acima_vwap', 0.0)
+        acima_ajuste = row.get('acima_ajuste_oficial', 0.0)
+        pos_range = row.get('posicao_range_dia', 0.0)
+        
+        # aggr_imb × contexto
+        row['aggr_x_dist_vwap'] = aggr * dist_vwap
+        row['aggr_x_dist_ajuste_oficial'] = aggr * dist_ajuste
+        row['aggr_x_acima_vwap'] = aggr * acima_vwap
+        row['aggr_x_acima_ajuste_oficial'] = aggr * acima_ajuste
+        row['aggr_x_posicao_range_dia'] = aggr * pos_range
+        
+        # cvd_total × contexto
+        row['cvd_x_dist_vwap'] = cvd * dist_vwap
+        row['cvd_x_dist_ajuste_oficial'] = cvd * dist_ajuste
+        row['cvd_x_acima_vwap'] = cvd * acima_vwap
+        row['cvd_x_acima_ajuste_oficial'] = cvd * acima_ajuste
+        
+        # imbalance × contexto
+        row['imb_x_dist_vwap'] = imb5 * dist_vwap
+        row['imb_x_dist_ajuste_oficial'] = imb5 * dist_ajuste
+        
+        # volume × contexto
+        row['vol_x_acima_vwap'] = vol * acima_vwap
+        row['vol_x_acima_ajuste_oficial'] = vol * acima_ajuste
 
         if ativo in self.ajuste_anterior_oficial:
             row['ajuste_anterior_oficial'] = self.ajuste_anterior_oficial[ativo]
@@ -294,6 +545,42 @@ class ScorerML:
                     row['dist_ajuste_oficial_norm'] = (preco - adj) / max(row.get('_vol_pts', 1), 1e-9)
                     row['acima_ajuste_oficial'] = float(preco > adj)
                     row['abaixo_ajuste_oficial'] = float(preco < adj)
+                    
+                    # v12.0: Atualizar regime pos_vs_ajuste
+                    if ativo in self.regime:
+                        vol_ref = max(row.get('_vol_pts', 1.0), 1e-9)
+                        self.regime[ativo]._volta_dia = preco
+                        # Atualizar regime com dados do snapshot
+                        aggr = row.get('aggr_imb', 0.0)
+                        cvd = row.get('cvd_total', 0.0)
+                        vwap_val = self.vwaps[ativo].vwap if ativo in self.vwaps else None
+                        self.regime[ativo].update(ts_ms, preco, row.get('_vol_pts', 0.0), 
+                                                aggr, cvd, vwap_val)
+                        row.update(self.regime[ativo].snapshot())
+                        row['regime_pos_vs_ajuste'] = row.get('dist_ajuste_oficial_norm', 0.0)
+
+        # 6. Features de ATR (v12.0)
+        if ativo in self._atr_values:
+            if preco > 0:
+                prev_preco = self._atr_prev.get(ativo)
+                if prev_preco is not None:
+                    true_range = abs(preco - prev_preco)
+                    self._atr_values[ativo] = self._atr_alpha * true_range + (1 - self._atr_alpha) * self._atr_values[ativo]
+                else:
+                    self._atr_values[ativo] = 0.0
+                self._atr_prev[ativo] = preco
+                row['atr_14'] = self._atr_values[ativo]
+                row['atr_14_norm'] = self._atr_values[ativo] / max(preco, 1.0)
+            else:
+                row['atr_14'] = self._atr_values.get(ativo, 0.0)
+                row['atr_14_norm'] = self._atr_values.get(ativo, 0.0) / max(preco, 1.0) if preco > 0 else 0.0
+        else:
+            row['atr_14'] = 0.0
+            row['atr_14_norm'] = 0.0
+
+        # 7. Features de Regime (v12.0) — calcular se não foram atualizadas
+        if ativo in self.regime and 'regime_realiz_vol' not in row:
+            row.update(self.regime[ativo].snapshot())
 
         # v11.11: Extração via FeatureManifest (fail-safe)
         if self.manifest:
@@ -320,6 +607,12 @@ class ScorerML:
             self.ultimo_error = repr(exc)
             log.error('[scorer] predict falhou: %r (fallos=%d)', exc, self.fallos)
             return 0.5
+        
+        # v12.2: ECE fallback — se ECE alto, retorna probabilidade neutra
+        if hasattr(self, '_ece') and self._ece > 0.15:
+            log.warning('[ML] ECE alto (%.4f), usando fallback neutro', self._ece)
+            return 0.5
+        
         self.ultimo_ok_ts = time.time()
         return p
 
@@ -348,6 +641,12 @@ class ScorerML:
                 'cruzou_vwap': vt.cruzou_vwap,
                 'vol_total': vt.vol_total,
             }
+        
+        # v12.0: Estado do regime
+        regime_estado = {}
+        for a, rt in self.regime.items():
+            regime_estado[a] = rt.snapshot()
+        
         return {
             'ativos': list(self.prob.keys()),
             'prob': dict(self.prob),
@@ -360,4 +659,5 @@ class ScorerML:
             'features_modelo': list(self.features),
             'vwap_estado': vwap_estado,
             'ajuste_anterior_oficial': dict(self.ajuste_anterior_oficial),
+            'regime_estado': regime_estado,
         }

@@ -171,12 +171,17 @@ class InstitutionalContext:
         features['zona_ajuste'] = self._compute_zone(features['dist_ajuste_pts'], zone_threshold)
         
         # Posição relativa (0-1, onde 0=minima, 1=maxima)
+        # Nome canônico: posicao_range_dia (padrão batch v950)
+        # Alias: posicao_relativa (compatibilidade com código legado)
         if s['maxima'] > s['minima'] and s['maxima'] > 0:
-            features['posicao_relativa'] = round(
+            pos_range = round(
                 (preco - s['minima']) / (s['maxima'] - s['minima']), 3
             )
+            features['posicao_range_dia'] = pos_range
+            features['posicao_relativa'] = pos_range  # alias para compatibilidade
         else:
-            features['posicao_relativa'] = 0.5
+            features['posicao_range_dia'] = 0.5
+            features['posicao_relativa'] = 0.5  # alias para compatibilidade
         
         # Amplitude do dia
         features['amplitude_dia_pts'] = round(s['maxima'] - s['minima'], 1) if s['maxima'] > 0 and s['minima'] > 0 else 0.0

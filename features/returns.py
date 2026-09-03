@@ -24,3 +24,7 @@ class ReturnsTracker:
             else:
                 s[f"retorno_{n}x100ms"] = None
         return s
+
+    def reset_diario(self):
+        """v12.2: Reset diário para evitar acúmulo entre dias."""
+        self._buf = []

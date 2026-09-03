@@ -62,3 +62,11 @@ class VolumeRelativoTracker:
             'volume_por_minuto': round(vol_min, 2),
             'volume_relativo': round(vol_relativo, 4),
         }
+
+    def reset_diario(self):
+        """v12.2: Reset diário para evitar acúmulo entre dias."""
+        self._volume_dia = 0.0
+        self._volume_por_minuto.clear()
+        self._minuto_atual = -1
+        self._historico.clear()
+        self._ultimo_dia = None

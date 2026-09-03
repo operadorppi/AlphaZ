@@ -47,8 +47,34 @@ class RiskEngine:
         # 1. Daily Loss Limit
         self.max_drawdown_dia = cb.get('nivel3_pnl', -500)
         
-        # 2. Max Exposure
-        self.max_exposure_pts = self.config.get('max_exposure_pts', 1000)
+        # 2. Max Exposure (por ativo, em R$)
+        default_exposure = {'WIN': 200000, 'IND': 2000000, 'WDO': 200000000, 'DOL': 5000000000}
+        cfg_exp = self.config.get('max_exposure_brl', default_exposure)
+        if isinstance(cfg_exp, dict):
+            self.max_exposure_brl = {**default_exposure, **cfg_exp}
+        else:
+            self.max_exposure_brl = {k: cfg_exp for k in default_exposure}
+        
+        # 2b. Lotes mínimos por ativo
+        default_lotes = {'WIN': 1, 'IND': 5, 'WDO': 1, 'DOL': 5}
+        cfg_lotes = self.config.get('lotes_minimos', default_lotes)
+        self.lotes_minimos = {**default_lotes, **cfg_lotes} if isinstance(cfg_lotes, dict) else default_lotes
+        
+        # 2c. Valor do tick por ativo (R$ por ponto)
+        default_ticks = {'WIN': 0.20, 'IND': 1.00, 'WDO': 5.00, 'DOL': 125.00}
+        cfg_ticks = self.config.get('tick_values', default_ticks)
+        self.tick_values = {**default_ticks, **cfg_ticks} if isinstance(cfg_ticks, dict) else default_ticks
+        
+        # 2d. Fórmula nominal por ativo
+        # divisor: RTD entrega DOL/WDO em pontos (5123 = R$5,123), dividir por 1000
+        default_nominal = {
+            'WIN': {'tipo': 'pontos', 'multiplier': 0.20, 'divisor': 1},
+            'IND': {'tipo': 'pontos', 'multiplier': 5, 'divisor': 1},
+            'WDO': {'tipo': 'dolar', 'nominal_usd': 10000, 'divisor': 1000},
+            'DOL': {'tipo': 'dolar', 'nominal_usd': 250000, 'divisor': 1000},
+        }
+        cfg_nominal = self.config.get('nominal_formula', default_nominal)
+        self.nominal_formula = {**default_nominal, **cfg_nominal} if isinstance(cfg_nominal, dict) else default_nominal
         
         # 3. Max Position
         self.max_position_size = ps.get('max_position_size', 5)
@@ -150,6 +176,11 @@ class RiskEngine:
         if not protecoes['kill_switch']['allowed']:
             return self._criar_decisao(ativo, agora, signal, protecoes, False, 'KILL_SWITCH')
         
+        # 15. Sanidade de Alvos (TP/SL dentro de limites)
+        protecoes['sanidade_alvos'] = self._check_sanidade_alvos(ativo, signal.tp, signal.sl)
+        if not protecoes['sanidade_alvos']['allowed']:
+            return self._criar_decisao(ativo, agora, signal, protecoes, False, protecoes['sanidade_alvos']['detail'])
+        
         # 14. Circuit Breaker
         protecoes['circuit_breaker'] = self._check_circuit_breaker()
         if not protecoes['circuit_breaker']['allowed']:
@@ -244,7 +275,7 @@ class RiskEngine:
         
         return decision
     
-    def registrar_resultado(self, pnl: float, acertou: bool):
+    def registrar_resultado(self, pnl: float, acertou: bool, ativo: str = ''):
         """Registra resultado de um trade fechado."""
         self.pnl_dia += pnl
         self.lucro_acumulado += pnl
@@ -256,6 +287,24 @@ class RiskEngine:
         
         # Atualizar circuit breaker
         self._atualizar_circuit_breaker()
+    
+    def registrar_execucao(self, ativo: str, sinal_preco: float, exec_preco: float):
+        """Registra slippage e ativa circuit breaker se crítico."""
+        if sinal_preco <= 0 or exec_preco <= 0:
+            return
+        
+        tick_size = 5.0 if 'WIN' in ativo.upper() or 'IND' in ativo.upper() else 0.5
+        slip_pts = abs(exec_preco - sinal_preco)
+        slip_ticks = slip_pts / tick_size
+        
+        self.slippage_total += slip_pts
+        max_slip_ticks = self.config.get('max_slippage_ticks', 3)
+        
+        if slip_ticks > max_slip_ticks:
+            log.warning(f"[RISK ENGINE] Slippage: {slip_ticks:.1f} ticks em {ativo}")
+            if slip_ticks > max_slip_ticks * 2:
+                self.circuit_breaker_nivel = max(self.circuit_breaker_nivel, 3)
+                log.error("[RISK ENGINE] Slippage crítico! CB nível 3.")
     
     def atualizar_mercado(self, **kwargs):
         """Atualiza estado de mercado (chamado pelo motor)."""
@@ -293,6 +342,32 @@ class RiskEngine:
         self.slippage_total = 0.0
         self.exposure_atual = 0.0
         log.info("[RISK ENGINE] Reset diário executado")
+    
+    def _check_sanidade_alvos(self, ativo: str, tp: float, sl: float) -> Dict:
+        """15. Sanidade de Alvos — TP/SL dentro de limites operacionais."""
+        if tp <= 0 or sl <= 0:
+            return {'allowed': False, 'detail': 'ALVOS_NULOS'}
+        
+        sym = ativo.upper()
+        is_win = 'WIN' in sym or 'IND' in sym
+        is_wdo = 'WDO' in sym or 'DOL' in sym
+        
+        if is_win:
+            if not (30 <= tp <= 2500):
+                return {'allowed': False, 'detail': 'TP_INSANO_WIN'}
+            if not (30 <= sl <= 1500):
+                return {'allowed': False, 'detail': 'SL_INSANO_WIN'}
+        elif is_wdo:
+            if not (1.0 <= tp <= 200.0):
+                return {'allowed': False, 'detail': 'TP_INSANO_WDO'}
+            if not (1.0 <= sl <= 100.0):
+                return {'allowed': False, 'detail': 'SL_INSANO_WDO'}
+        
+        max_ratio = self.config.get('trading', {}).get('max_sl_tp_ratio', 3.0)
+        if sl / tp > max_ratio:
+            return {'allowed': False, 'detail': 'RISCO_RETORNO_INSANO'}
+        
+        return {'allowed': True, 'detail': 'alvos_ok'}
     
     def get_estado(self) -> Dict[str, Any]:
         """Retorna estado atual para dashboard/logging."""
@@ -434,16 +509,39 @@ class RiskEngine:
         }
     
     def _check_model_availability(self) -> Dict:
-        """10. Model Unavailable — modelo ML indisponível."""
-        if not self._ml_disponivel:
+        """10. Model Unavailable — modelo ML indisponível (FASE 8 P1).
+        
+        Usa mlgate/ para avaliação padronizada da disponibilidade do ML.
+        """
+        from mlgate import MlAvailability, evaluate_gate, PRODUCTION_POLICY, DEVELOPMENT_POLICY
+        
+        # Determinar se ML está disponível
+        if self._ml_disponivel:
+            ml_status = MlAvailability.up()
+        else:
             elapsed = time.time() - self._ml_ultimo_update
-            if elapsed > self.tolerancia_sem_ml_s:
-                return {
-                    'allowed': True,  # Warning, não bloqueia
-                    'warning': True,
-                    'detail': f'ML indisponivel por {elapsed:.0f}s (usando heuristica)'
-                }
-        return {'allowed': True, 'detail': 'ml_ok' if self._ml_disponivel else 'heuristica'}
+            ml_status = MlAvailability.down(f"ML indisponivel por {elapsed:.0f}s")
+        
+        # Determinar política baseada no ambiente
+        ambiente = self.config.get('environment', 'DEVELOPMENT')
+        if ambiente == 'PRODUCTION':
+            policy = PRODUCTION_POLICY
+        else:
+            policy = DEVELOPMENT_POLICY
+        
+        # Avaliar gate (heuristic_decision: fallback quando ML indisponível)
+        decision = evaluate_gate(
+            ml_status, policy,
+            heuristic_decision=lambda: True  # heurística aprova por padrão
+        )
+        
+        return {
+            'allowed': decision.allowed,
+            'ml_available': decision.ml_available,
+            'ml_unavailable_reason': decision.ml_unavailable_reason,
+            'decision_source': decision.decision_source,
+            'detail': decision.note,
+        }
     
     def _check_confidence(self, signal: Signal) -> Dict:
         """11. Confidence Protection — confiança abaixo do mínimo."""
@@ -455,16 +553,44 @@ class RiskEngine:
             'detail': f'conf={signal.confianca:.3f} min={self.min_confianca}'
         }
     
+    def _calcular_exposure_nominal(self, signal: Signal) -> float:
+        """Calcula exposição nominal em R$.
+        
+        Fórmulas:
+        - Índice (WIN/IND): E = multiplier × cotação_ibov / divisor
+        - Dólar (WDO/DOL): E = nominal_usd × cotação_dólar / divisor
+        
+        RTD entrega DOL/WDO em pontos (5123 = R$5,123), divisor=1000.
+        """
+        n = signal.quantidade
+        p = signal.preco_ref
+        
+        if n <= 0 or p <= 0:
+            return 0.0
+        
+        sym = signal.symbol.replace('V26', '').replace('Q26', '').replace('U26', '')
+        formula = self.nominal_formula.get(sym, {'tipo': 'pontos', 'multiplier': 0.20, 'divisor': 1})
+        divisor = formula.get('divisor', 1)
+        
+        if formula['tipo'] == 'dolar':
+            return formula['nominal_usd'] * p / divisor
+        else:
+            return formula['multiplier'] * p / divisor
+    
     def _check_exposure(self, signal: Signal) -> Dict:
-        """2. Max Exposure — exposição agregada."""
-        nova_exposure = self.exposure_atual + signal.tp + signal.sl
-        excedido = nova_exposure > self.max_exposure_pts
+        """2. Max Exposure — exposição por ativo (E = N * P * V em R$)."""
+        exposure_nova = self._calcular_exposure_nominal(signal)
+        nova_exposure = self.exposure_atual + exposure_nova
+        # Limite por ativo
+        sym = signal.symbol.replace('V26', '').replace('Q26', '').replace('U26', '')
+        limite = self.max_exposure_brl.get(sym, 100000)
+        excedido = nova_exposure > limite
         return {
             'allowed': not excedido,
             'atual': round(self.exposure_atual, 1),
             'nova': round(nova_exposure, 1),
-            'limite': self.max_exposure_pts,
-            'detail': f'exposure={nova_exposure:.0f}/{self.max_exposure_pts}'
+            'limite': limite,
+            'detail': f'{sym}: R${nova_exposure:,.0f}/R${limite:,.0f} (N={signal.quantidade}, P={signal.preco_ref:.0f}, V=R${signal.valor_ponto})'
         }
     
     def _check_position(self, signal: Signal) -> Dict:
