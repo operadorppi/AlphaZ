@@ -153,6 +153,21 @@ class ReplayEngine:
         self._posicao = None
         self._cooldown_until_ms = 0  # timestamp ms (simulado, nao wall clock)
         self._events = 0
+        # P0-A14: book do Hive por ativo p/ paridade live/replay.
+        # ativo -> [(ts_ms, bid_p, bid_v, ask_p, ask_v), ...] ordenado por ts_ms
+        self._books = {}
+        self._book_idx = defaultdict(int)
+        # P0-A15: replay NUNCA engole erro silenciosamente.
+        # strict=True aborta no 1o erro inesperado; strict=False (default,
+        # diagnostico) conta e loga TODOS os erros e o gate e reprovado quando
+        # houver perda — resultados comprometidos nunca passam como validos.
+        self.strict = bool(self.config.get("replay_strict", False))
+        self._max_erros_log = int(self.config.get("replay_max_erros_log", 5))
+        self._erros = 0
+        self._erros_por_tipo = defaultdict(int)
+        self._primeiros_erros = []
+        self._linhas_ignoradas = 0
+        self._arquivos_pulados = 0
 
     def _init_camadas(self):
         from core.market_state import MarketState
@@ -179,6 +194,217 @@ class ReplayEngine:
             except Exception as e:
                 log.warning(f"[REPLAY] Scorer nao carregou: {e}")
 
+    def _registrar_erro(self, ev):
+        """P0-A15: registra um erro de processamento com detalhe e amostra.
+
+        Nunca silencioso: o 1o erro loga a excecao completa (com traceback);
+        os demais sao contados por tipo e amostrados (ate _max_erros_log) para
+        nao inundar o log com 999k linhas identicas. No fim do dia, se houve
+        qualquer erro, o gate e FORCADO a reprovar (resultado comprometido).
+        """
+        import traceback
+        self._erros += 1
+        tipo = "desconhecido"
+        try:
+            exc = sys.exc_info()[1]
+            tipo = type(exc).__name__ if exc is not None else "desconhecido"
+            self._erros_por_tipo[tipo] += 1
+            if len(self._primeiros_erros) < self._max_erros_log:
+                self._primeiros_erros.append({
+                    "tipo": tipo,
+                    "erro": str(exc),
+                    "evento": {
+                        "ativo": ev.get("ativo") if isinstance(ev, dict) else None,
+                        "ts_ms": ev.get("ts_ms") if isinstance(ev, dict) else None,
+                    },
+                    "traceback": traceback.format_exc()[-2000:],
+                })
+                log.error(
+                    f"[REPLAY] ERRO #{self._erros} [{tipo}] no evento "
+                    f"{ev if isinstance(ev, dict) else ev}: {exc}")
+                log.error(f"[REPLAY]   {traceback.format_exc().splitlines()[-3:]}")
+        except Exception:
+            self._erros_por_tipo["desconhecido"] += 1
+
+    def _reset_erros(self):
+        """P0-A15: zera os contadores de erro (1x por dia)."""
+        self._erros = 0
+        self._erros_por_tipo = defaultdict(int)
+        self._primeiros_erros = []
+        self._linhas_ignoradas = 0
+        self._arquivos_pulados = 0
+
+    def _processar_evento(self, ev, t0):
+        """P0-A15: processa 1 evento com politica explicita de erro.
+
+        Retorna True se processou, False se o erro foi em modo permissivo.
+        Em modo STRICT, qualquer excecao inesperada interrompe o replay
+        (re-raise) — uma perda silenciosa invalidaria a auditoria.
+        """
+        try:
+            self._process_neg(ev)
+            return True
+        except Exception:
+            self._registrar_erro(ev)
+            if self.strict:
+                log.error("[REPLAY] STRICT: abortando replay por erro inesperado "
+                          "(perda nao pode ser silenciosa em auditoria)")
+                raise
+            return False
+
+    def _processar_lote_eventos(self, eventos, t0):
+        """P0-A15: loop comum de replay_dia/replay_multi_dia."""
+        for ev in eventos:
+            self._events += 1  # tentado (para o progresso)
+            try:
+                ok = self._processar_evento(ev, t0)
+            except Exception:
+                # Modo strict abortou — propaga com contexto
+                raise
+            if self._erros and self._erros % 100000 == 0:
+                log.warning(f"  ... {self._erros:,} erros acumulados em {self._events:,} eventos")
+            if self._events % 100000 == 0:
+                log.info(f"  {self._events:,} ev, {len(self.metrics.trades)} trades, "
+                         f"{time.time()-t0:.1f}s")
+
+    def _dia_com_erros(self, dia_str):
+        """True se o dia teve qualquer perda (erros, linhas/arquivos pulados)."""
+        return (self._erros > 0 or self._linhas_ignoradas > 0
+                or self._arquivos_pulados > 0)
+
+    def _resumo_erros(self, dia_str):
+        """Loga o resumo de erros do dia + retorna dict p/ o resultado."""
+        resumo = {
+            "erros": self._erros,
+            "erros_por_tipo": dict(self._erros_por_tipo),
+            "linhas_ignoradas": self._linhas_ignoradas,
+            "arquivos_pulados": self._arquivos_pulados,
+            "amostras": self._primeiros_erros[:3],
+        }
+        if self._erros:
+            log.error(f"[REPLAY] Dia {dia_str}: {self._erros} eventos falharam "
+                      f"de {self._events} ({dict(self._erros_por_tipo)})")
+            log.error(f"[REPLAY] Dia {dia_str}: resultado COMPROMETIDO — gate reprovado")
+        if self._linhas_ignoradas:
+            log.warning(f"[REPLAY] Dia {dia_str}: {self._linhas_ignoradas} linhas JSONL "
+                        "ilegiveis ignoradas na carga")
+        if self._arquivos_pulados:
+            log.warning(f"[REPLAY] Dia {dia_str}: {self._arquivos_pulados} arquivos "
+                        "Parquet ilegiveis pulados na carga")
+        return resumo
+
+    def _ler_book_hive(self, pasta_neg, dia_str=None):
+        """P0-A14: Le snapshots de BOOK do Parquet Hive e monta snapshots
+        compactos por ativo, ordenados por ts_ms.
+
+        O RAW de BOOK e denormalizado (1 row por nivel de preco) e as linhas
+        de um mesmo snapshot sao consecutivas no arquivo (o writer grava o
+        loop de niveis sob lock). Detecta os blocos pela mudanca de
+        (ts_ns, janela_id) com numpy e monta: [(ts_ms, bid_p, bid_v,
+        ask_p, ask_v), ...] com bids ordenados desc (melhor primeiro) e
+        asks asc — mesma semantica de profundidade que o live usa.
+
+        Retorno: dict ativo -> lista de snapshots compactos ordenada por ts.
+        Vazio se nao ha BOOK Hive para o dia (replay segue sem book, com
+        features de OFI zeradas — comportamento legado, agora logado).
+        """
+        try:
+            from adapters.file_storage import find_hive_files
+        except Exception:
+            return {}
+        files = find_hive_files(str(pasta_neg), dia_str=dia_str, data_type="BOOK")
+        if not files:
+            return {}
+        try:
+            import pyarrow.parquet as pq
+        except Exception as e:
+            log.warning(f"[REPLAY] pyarrow indisponivel p/ ler book: {e}")
+            return {}
+        cols = ["ts_ns", "ativo", "janela_id", "bid", "ask", "bid_volume", "ask_volume"]
+        por_ativo = defaultdict(list)
+        n_snaps = 0
+        for f in files:
+            try:
+                tbl = pq.read_table(str(f), columns=cols)
+            except Exception as e:
+                log.warning(f"[REPLAY] Falha ao ler book {f}: {e}")
+                continue
+            if tbl.num_rows == 0:
+                continue
+            ts_ns = tbl.column("ts_ns").to_numpy(zero_copy_only=False)
+            jan = tbl.column("janela_id").to_numpy(zero_copy_only=False)
+            ativos = tbl.column("ativo").to_pylist()
+            bid_p = tbl.column("bid").to_numpy(zero_copy_only=False)
+            ask_p = tbl.column("ask").to_numpy(zero_copy_only=False)
+            bid_v = tbl.column("bid_volume").to_numpy(zero_copy_only=False)
+            ask_v = tbl.column("ask_volume").to_numpy(zero_copy_only=False)
+
+            ts_i = ts_ns.astype(np.int64)
+            ja_i = jan.astype(np.int64)
+            # Limites dos blocos: mudanca de (ts_ns, janela_id)
+            mudanca = np.empty(ts_i.size, dtype=bool)
+            mudanca[0] = True
+            if ts_i.size > 1:
+                mudanca[1:] = (ts_i[1:] != ts_i[:-1]) | (ja_i[1:] != ja_i[:-1])
+            bounds = np.append(np.flatnonzero(mudanca), ts_i.size)
+            for k in range(len(bounds) - 1):
+                a, b = int(bounds[k]), int(bounds[k + 1])
+                ts_ms = int(ts_i[a] // 1_000_000)
+                if ts_ms <= 0:
+                    continue
+                bps, bvs = bid_p[a:b], bid_v[a:b]
+                aps, avs = ask_p[a:b], ask_v[a:b]
+                mb = (bps > 0) & (bvs > 0)
+                ma = (aps > 0) & (avs > 0)
+                if not mb.any() and not ma.any():
+                    continue
+                # bids desc (melhor primeiro), asks asc
+                bps_b, bvs_b = bps[mb], bvs[mb]
+                aps_a, avs_a = aps[ma], avs[ma]
+                ob = np.argsort(-bps_b)
+                oa = np.argsort(aps_a)
+                por_ativo[ativos[a]].append((
+                    ts_ms,
+                    bps_b[ob].tolist(), bvs_b[ob].tolist(),
+                    aps_a[oa].tolist(), avs_a[oa].tolist(),
+                ))
+                n_snaps += 1
+        for ativo in por_ativo:
+            por_ativo[ativo].sort(key=lambda s: s[0])
+        if n_snaps:
+            log.info(f"[REPLAY] Book Hive: {n_snaps:,} snapshots em {len(por_ativo)} ativos")
+        return dict(por_ativo)
+
+    def _alimentar_book_ate(self, sym, ts_ms):
+        """P0-A14: Alimenta os snapshots de book do ativo com ts <= ts_ms,
+        na ordem temporal (merge TT+BOOK igual ao caminho do live).
+
+        Sem isso, o replay rodava com OFI/features de book ZERADAS enquanto
+        o live alimentava o book a cada poll — sinal do replay divergia do
+        sinal real (pesos heuristicos de ofi/book_* em learning.py).
+        """
+        snaps = self._books.get(sym)
+        if not snaps:
+            return
+        i = self._book_idx.get(sym, 0)
+        if i >= len(snaps) or snaps[i][0] > ts_ms:
+            return
+        try:
+            from core.contracts import BookSnapshot, BookLevel
+        except Exception:
+            return
+        while i < len(snaps) and snaps[i][0] <= ts_ms:
+            ts_s, bp, bv, ap, av = snaps[i]
+            bids = [BookLevel(float(p), int(v)) for p, v in zip(bp, bv)]
+            asks = [BookLevel(float(p), int(v)) for p, v in zip(ap, av)]
+            try:
+                self.state.alimentar_book(BookSnapshot(
+                    symbol=sym, timestamp_ms=ts_s, bids=bids, asks=asks))
+            except Exception as e:
+                log.warning(f"[REPLAY] alimentar_book falhou ({sym} t={ts_s}): {e}")
+            i += 1
+        self._book_idx[sym] = i
+
     def _ler_tt_hive(self, pasta_neg, dia_str=None):
         """v15.1: Le negocios do Parquet Hive (RAW/data_type=TT/date=.../asset=...).
 
@@ -201,7 +427,10 @@ class ReplayEngine:
             try:
                 tbl = pq.read_table(f, columns=cols)
             except Exception as e:
-                log.warning(f"[REPLAY] Falha ao ler {f}: {e}")
+                # P0-A15: arquivo pulado e contado (nunca silencioso)
+                self._arquivos_pulados += 1
+                log.warning(f"[REPLAY] Falha ao ler {f}: {e} "
+                            f"(total pulados: {self._arquivos_pulados})")
                 continue
             for row in tbl.to_pylist():
                 if row.get("is_rlp"):
@@ -248,17 +477,25 @@ class ReplayEngine:
                         ev["_tipo"] = "NEG"
                         eventos.append(ev)
                     except Exception:
-                        pass
+                        # P0-A15: linha ilegivel e contada (nunca silenciosa)
+                        self._linhas_ignoradas += 1
+                        if self._linhas_ignoradas <= 3:
+                            log.warning(f"[REPLAY] Linha JSONL ilegivel em {nf.name} "
+                                        f"(total: {self._linhas_ignoradas}): "
+                                        f"{line[:120]}")
         eventos.sort(key=lambda e: e.get("ts_ms", 0))
         return eventos
 
     def replay_dia(self, pasta_neg, dia_str=None):
         """Replay de 1 dia. Retorna metricas calculadas."""
         self._init_camadas()
+        self._books = self._ler_book_hive(pasta_neg, dia_str)
+        self._book_idx = defaultdict(int)
         self.metrics = TradeMetrics(self.config.get("custo_execucao_win", 5.0))
         self._posicao = None
         self._cooldown_until_ms = 0
         self._events = 0
+        self._reset_erros()
 
         eventos = self._carregar_eventos(pasta_neg, dia_str)
         if not eventos:
@@ -267,17 +504,31 @@ class ReplayEngine:
 
         log.info(f"[REPLAY] Dia {dia_str}: {len(eventos)} eventos")
         t0 = time.time()
-        for ev in eventos:
-            try:
-                self._process_neg(ev)
-                self._events += 1
-            except Exception:
-                pass
-            if self._events % 100000 == 0:
-                log.info(f"  {self._events:,} ev, {len(self.metrics.trades)} trades, {time.time()-t0:.1f}s")
+        try:
+            self._processar_lote_eventos(eventos, t0)
+        except Exception:
+            log.error(f"[REPLAY] Dia {dia_str} ABORTADO em modo STRICT")
+            return {
+                "dia": dia_str, "metrics": None, "gate": None,
+                "abortado": True, "erros": self._erros,
+                "erros_por_tipo": dict(self._erros_por_tipo),
+                "amostras": self._primeiros_erros[:3],
+                "elapsed_s": round(time.time() - t0, 1),
+            }
 
         m = self.metrics.calcular()
         g = self.metrics.gate()
+        resumo_erros = self._resumo_erros(dia_str)
+        if self._dia_com_erros(dia_str):
+            # P0-A15: resultados comprometidos nunca aprovam o gate
+            g = {
+                "aprovado": False, "pf_ok": False, "wr_ok": False, "dd_ok": False,
+                "pf_atual": m.get("profit_factor", 0), "wr_atual": m.get("win_rate", 0),
+                "dd_atual": m.get("max_drawdown_dia", 0),
+                "motivo": f"REPLAY COMPROMETIDO: {self._erros} erros + "
+                          f"{self._linhas_ignoradas} linhas + "
+                          f"{self._arquivos_pulados} arquivos (ver resumo_erros)",
+            }
         elapsed = time.time() - t0
 
         log.info(f"[REPLAY] Dia {dia_str} concluido em {elapsed:.1f}s")
@@ -285,7 +536,8 @@ class ReplayEngine:
         log.info(f"  PnL: {m['total_pnl']:+.1f} | DD/dia: {m['max_drawdown_dia']:.0f}")
         log.info(f"  Gate: {g['motivo']} | {'APROVADO' if g['aprovado'] else 'REPROVADO'}")
 
-        return {"dia": dia_str, "metrics": m, "gate": g, "elapsed_s": round(elapsed, 1)}
+        return {"dia": dia_str, "metrics": m, "gate": g,
+                "resumo_erros": resumo_erros, "elapsed_s": round(elapsed, 1)}
 
     def replay_multi_dia(self, pasta_neg, dias):
         """Replay de N dias consecutivos. Retorna lista de resultados + verdicto."""
@@ -302,6 +554,9 @@ class ReplayEngine:
             self._posicao = None
             self._cooldown_until_ms = 0
             self._events = 0
+            self._reset_erros()
+            self._books = self._ler_book_hive(pasta_neg, dia_str)
+            self._book_idx = defaultdict(int)
 
             eventos = self._carregar_eventos(pasta_neg, dia_str)
             if not eventos:
@@ -311,17 +566,32 @@ class ReplayEngine:
 
             log.info(f"  {len(eventos)} eventos")
             t0 = time.time()
-            for ev in eventos:
-                try:
-                    self._process_neg(ev)
-                    self._events += 1
-                except Exception:
-                    pass
-                if self._events % 100000 == 0:
-                    log.info(f"    {self._events:,} ev, {len(self.metrics.trades)} trades")
+            try:
+                self._processar_lote_eventos(eventos, t0)
+            except Exception:
+                log.error(f"  Dia {dia_str} ABORTADO em modo STRICT")
+                todos_resultados.append({
+                    "dia": dia_str, "metrics": None, "gate": None,
+                    "abortado": True, "erros": self._erros,
+                    "erros_por_tipo": dict(self._erros_por_tipo),
+                    "amostras": self._primeiros_erros[:3],
+                })
+                continue
 
             m = self.metrics.calcular()
             g = self.metrics.gate()
+            resumo_erros = self._resumo_erros(dia_str)
+            if self._dia_com_erros(dia_str):
+                # P0-A15: resultados comprometidos nunca aprovam o gate
+                g = {
+                    "aprovado": False, "pf_ok": False, "wr_ok": False, "dd_ok": False,
+                    "pf_atual": m.get("profit_factor", 0),
+                    "wr_atual": m.get("win_rate", 0),
+                    "dd_atual": m.get("max_drawdown_dia", 0),
+                    "motivo": f"REPLAY COMPROMETIDO: {self._erros} erros + "
+                              f"{self._linhas_ignoradas} linhas + "
+                              f"{self._arquivos_pulados} arquivos",
+                }
             elapsed = time.time() - t0
 
             log.info(f"  Dia {dia_str}: {m['n_trades']} trades | WR={m['win_rate']:.1%} | PF={m['profit_factor']:.2f} | DD={m['max_drawdown_dia']:.0f}")
@@ -329,6 +599,7 @@ class ReplayEngine:
 
             todos_resultados.append({
                 "dia": dia_str, "metrics": m, "gate": g, "elapsed_s": round(elapsed, 1),
+                "resumo_erros": resumo_erros,
             })
 
         # Verdicto final
@@ -336,8 +607,14 @@ class ReplayEngine:
 
     def _verdicto(self, todos_resultados):
         """Calcula verdicto go/no-go baseado em todos os dias."""
-        validos = [r for r in todos_resultados if r.get("metrics") and not r.get("skipped")]
-        reprovados = [r for r in validos if not r["gate"]["aprovado"]]
+        # P0-A15: um dia so e "valido" se tem gate; dias abortados ou sem gate
+        # (strict, sem dados) contam como reprovados — um replay com perda de
+        # eventos NAO pode aprovar o gate.
+        validos = [r for r in todos_resultados
+                   if r.get("metrics") and r.get("gate") and not r.get("skipped")]
+        reprovados = [r for r in todos_resultados
+                      if r.get("abortado") or r.get("gate") is None
+                      or (r.get("gate") and not r["gate"]["aprovado"])]
         n_validos = len(validos)
 
         # Medias
@@ -363,7 +640,12 @@ class ReplayEngine:
         if reprovados:
             log.info(f"  Dias reprovados: {len(reprovados)}")
             for r in reprovados:
-                log.info(f"    {r['dia']}: {r['gate']['motivo']}")
+                if r.get("gate") is not None:
+                    log.info(f"    {r['dia']}: {r['gate']['motivo']}")
+                elif r.get("abortado"):
+                    log.info(f"    {r['dia']}: ABORTADO (strict) com {r.get('erros', 0)} erros")
+                else:
+                    log.info(f"    {r['dia']}: sem dados validos / gate nulo")
         log.info(f"\n  >>> VERDICTO: {'GO (aprovado)' if aprovado else 'NO-GO (reprovado)'}")
         log.info(f"{'='*60}")
 
@@ -398,6 +680,11 @@ class ReplayEngine:
         vend = ev.get("vendedora", "")
         if p <= 0 or q <= 0:
             return
+        # P0-A14: alimentar o book deste ativo ate o ts do trade (merge
+        # temporal). Sem isto, ofi_total/ofi_ewma e book_* ficam zerados no
+        # replay enquanto sao reais no live.
+        if self._books:
+            self._alimentar_book_ate(sym, ts)
         self.state.alimentar_negocio(sym, ts, p, q, agr, comp, vend)
         if self.scorer:
             self.scorer.evento(sym, ts, p, q, agr, comp, vend)
@@ -464,13 +751,28 @@ if __name__ == "__main__":
                         help="Custo de execucao por trade (pts)")
     parser.add_argument("--cooldown", type=int, default=5000,
                         help="Cooldown entre trades (ms)")
+    parser.add_argument("--strict", action="store_true",
+                        help="P0-A15: aborta no 1o erro inesperado (default: permissivo "
+                             "com contagem explicita + gate reprovado quando ha perda)")
     args = parser.parse_args()
 
-    config = {
+    # P0-A14: o replay deve rodar com a MESMA config operacional do live
+    # (config.json), nao um config minimalista de 3 chaves com defaults de
+    # codigo divergentes. Args do CLI sobrescrevem apenas o especifico do
+    # replay (save_dir, custo, cooldown).
+    config = {}
+    try:
+        from config import get_config_dict
+        config = dict(get_config_dict())
+        log.info("[REPLAY] config.json operacional carregado (paridade com o live)")
+    except Exception as e:
+        log.warning(f"[REPLAY] config.json nao carregou ({e}); usando defaults do CLI")
+    config.update({
         "save_dir": args.pasta,
         "custo_execucao_win": args.custo,
         "cooldown_entre_trades_ms": args.cooldown,
-    }
+        "replay_strict": args.strict,
+    })
     engine = ReplayEngine(
         config=config,
         modelo_path=args.modelo,

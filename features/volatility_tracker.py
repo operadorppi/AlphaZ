@@ -1,27 +1,18 @@
-# volatility_tracker.py — Volatilidade multi-timeframe ao vivo (v9.37)
-# EWMA causal de |ret| em 7 janelas: 100ms a 5min.
-from collections import deque
+# -*- coding: utf-8 -*-
+"""
+features/volatility_tracker.py — ALIAS de compatibilidade (P0-A21, v15.15).
 
-_VE = 1e-9
-_WINDOWS = [(1,"100ms"),(5,"500ms"),(10,"1s"),(50,"5s"),(100,"15s"),(300,"1min"),(1500,"5min")]
+Este arquivo era um duplicado ORFAO do VolatilityTracker (features/volatility.py)
+e mantinha o bug de indexar janelas por CONTAGEM de trades (1 trade = 100ms).
+Qualquer import antigo (`from features.volatility_tracker import ...`) pegava
+a versao vazada silenciosamente.
 
-class VolatilityTracker:
-    def __init__(self):
-        # deque com maxlen gerencia o tamanho automaticamente em O(1)
-        self._buf = deque(maxlen=1501)
-        self._ews = {}  # nome -> ewma value
-        for _, n in _WINDOWS:
-            self._ews[n] = 0.0
+Implementacao unica agora vive em features/volatility.py (grid temporal de
+100ms do master clock, borda de corte identica ao GeradorJanelas/batch).
+Este modulo apenas re-exporta — nao existe mais codigo duplicado p/ divergir.
+"""
 
-    def update(self, preco):
-        if preco is None or preco <= 0: return
-        self._buf.append(float(preco))
-        # Atualizar EWMA para cada janela
-        for n, nome in _WINDOWS:
-            if len(self._buf) > n:
-                ret = abs(self._buf[-1] - self._buf[-n-1]) / max(self._buf[-n-1], _VE)
-                alpha = 2.0 / (n + 1)
-                self._ews[nome] = alpha * ret + (1 - alpha) * self._ews[nome]
+from features.volatility import VolatilityTracker  # noqa: F401
+from features.volatility import _HORIZONTES  # noqa: F401
 
-    def snapshot(self):
-        return {f"vol_{k}": round(v, 6) for k, v in self._ews.items()}
+__all__ = ["VolatilityTracker"]

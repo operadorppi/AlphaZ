@@ -26,17 +26,15 @@ class EventClock:
         self.dia_atual = date.today()
         self.session_start = time.time()
 
-    def _offset_local_utc_ms(self):
-        """Deslocamento (ms) que a hora local adianta da UTC."""
-        ag = datetime.now().astimezone()
-        return int(ag.utcoffset().total_seconds() * 1000) if ag.utcoffset() else 0
-
     def tod_de_ts(self, ts_ms):
-        """Normaliza timestamp para time-of-day em ms (hora local B3)."""
-        if ts_ms and ts_ms > 1e11:
-            utc_tod = ts_ms % 86400000
-            return (utc_tod + self._offset_local_utc_ms()) % 86400000
-        return ts_ms or 0
+        """Normaliza timestamp para time-of-day em ms (hora de Brasilia).
+
+        P0-A22 (v15.16): delega a funcao temporal OFICIAL
+        (core.temporal.tod_de_ts_br, UTC-3 fixo America/Sao_Paulo). ANTES
+        usava o offset do fuso da maquina (quebrava fora de SP).
+        """
+        from core.temporal import tod_de_ts_br
+        return tod_de_ts_br(ts_ms)
 
     def agora_tod_ms(self):
         """TOD atual em ms."""

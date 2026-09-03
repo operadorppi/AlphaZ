@@ -79,9 +79,34 @@ segundo da observação. A diferença entre os dois é a latência de poll
 
 ## 2. TIMEZONE
 
-- **Timezone oficial:** `America/Sao_Paulo` (UTC-3)
-- **DST:** O Brasil não tem DST desde 2019, mas o `ZoneInfo` lida corretamente se reativado.
-- **Conversão DAT → epoch:** `dat_to_epoch_ms(dat_str)` usa a data de hoje no timezone BR como referência. Se o `DAT` for apenas `HH:MM:SS.mmm` (sem data), a data é inferida do dia corrente.
+- **Timezone oficial:** `America/Sao_Paulo` (UTC-3, sem DST desde 2019 — Lei
+  13.981/2020; política vigente em 2026).
+- **Conversão DAT → epoch:** `dat_to_epoch_ms(dat_str)` usa a data de hoje no
+  timezone BR como referência. Se o `DAT` for apenas `HH:MM:SS.mmm` (sem
+  data), a data é inferida do dia corrente.
+
+### 2.1 FONTE ÚNICA de conversão ts → horário de pregão (P0-A22, v15.16)
+
+NUNCA converter timestamp com `ts % 86400000` (TOD UTC) nem com o offset do
+fuso da máquina. Epoch ms é UTC; TOD de Brasília = `(ts − 3h) mod 86400000`.
+
+**Funções oficiais (core/temporal.py):**
+
+```
+tod_de_ts_br(ts_ms)  # epoch ms -> TOD de Brasília em ms (pregao, fase_sessao)
+dia_de_ts_br(ts_ms)  # epoch ms -> dia civil de Brasília em epoch-days
+```
+
+**Bug corrigido:** o `SessionTimeTracker.snapshot()` usava `ts % 86400000`
+cru enquanto o `update()` usava −3h — 14h BRT (17h UTC) era classificado
+como bloco 5 (fechamento) em vez de 4 (tarde); o `VolumeRelativoTracker`
+nem contabilizava volume após 14h BRT; o batch (`features_expansao`) gravava
+`segundos_desde_abertura`/`sin_horario` deslocados +3h no dataset.
+
+**Onde NÃO existe mais conversão manual:** session_time(_.py/_tracker), volume
+relativo(_.py/_tracker), `features.utils._tod_de_ts` e `EventClock.tod_de_ts`
+passam a delegar às funções oficiais. `_offset_local_utc_ms` ficou marcado
+como DEPRECADO (dependia do fuso da máquina).
 
 ### Tratamento de milissegundos
 
@@ -91,9 +116,37 @@ O `DAT` do Profit vem como `HH:MM:SS.mmm` (3 dígitos de milissegundos). O parse
 2. Se não houver milissegundos, assume `ms=0`.
 3. Se houver mais de 3 dígitos, trunca para 3 (microssegundos → milissegundos).
 
-### Virada de dia
+### Virada de dia / meia-noite (P1-A18, v15.13)
 
-Se o `DAT` for `23:59:59.000` e o próximo for `00:00:01.000`, o sistema trata como virada de dia automaticamente (a data de referência avança). Testado em `test_virada_de_dia_nao_causa_problema`.
+O `DAT` do Profit **não carrega data** — só `HH:MM:SS.mmm`. A conversão
+`dat_to_epoch_ms()` monta o epoch usando uma data de referência
+(`ref_dt`, default = agora em `TZ_BR`).
+
+**Regra de reconstrução:**
+
+```
+dt = ref_dt + (DAT como hora do dia)
+if (dt - ref_dt) > 6h:      # DAT montado no futuro por mais de uma sessão
+    dt -= 1 dia             # DAT pertence à sessão ANTERIOR (virada)
+```
+
+- **Por que 6h:** nunca dispara em sessão normal (futuro legítimo é de
+  milissegundos — o `validate_event_ts` ±30s é a barreira final). Só
+  dispara quando o DAT é de ~24h no futuro do referência, i.e., DAT
+  `23:59:59.xxx` recebido logo após `00:00` do dia novo.
+- **Determinístico:** compara com `ref_dt` (não com `now`), então replay e
+  testes com data explícita são reproduzíveis.
+- **Sem o retrocesso:** o DAT de 23:59 recebido após 00:00 seria montado
+  com o dia NOVO → futuro ~24h → rejeitado pelo `validate_event_ts` →
+  **evento perdido silenciosamente**. O retrocesso preserva o negócio com
+  o dia correto (passado < 1s → aceito).
+- Testado em `testes/test_timestamp_sessao_anterior_v1513.py`.
+
+**O que NÃO existe mais:** a reconstrução antiga do snapshot 28/08
+(`offset = agora_epoch - agora_tod; tms_epoch = offset + tms` no
+`file_storage.py`) foi removida no v14.1 — o `FileStorage` recebe o ts já
+em epoch (ms) e só converte ms→ns (`1e17`). A partição Hive `date=` usa a
+data da SESSÃO (`session_ts`), nunca o ts do evento.
 
 ---
 

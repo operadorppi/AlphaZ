@@ -269,6 +269,13 @@ class ScorerML:
         self.vrels = {a: VolumeRelativoTracker() for a in instrumentos}
         self.inter = CrossAssetEngine(ativo_principal=instrumentos[0], 
                                      ativo_contexto=instrumentos[1] if len(instrumentos)>1 else None)
+        # P0-A24 (v15.18): só o par principal×contexto alimenta o engine do
+        # intermarket. Instrumentos fora do par (ex.: IND/DOL capturados no
+        # mesmo motor) nunca chegam ao engine — antes viravam o contexto WDO
+        # por padrão (contaminação). O engine também rejeita por segurança.
+        self._inter_ativos = {instrumentos[0]}
+        if len(instrumentos) > 1:
+            self._inter_ativos.add(instrumentos[1])
 
         # Estado para detecção de aproximação/afastamento
         self._prev_dist_vwap = {}
@@ -373,15 +380,23 @@ class ScorerML:
         # v10.2: Volume Relativo e Intermarket
         if ativo in self.vrels:
             self.vrels[ativo].update(qtd, ts_ms)
-        self.inter.registrar(ativo, ts_ms, preco, (1.0 if agressor=='Comprador' else -1.0))
+        if ativo in self._inter_ativos:
+            self.inter.registrar(ativo, ts_ms, preco,
+                                 (1.0 if agressor == 'Comprador' else -1.0))
 
         if ativo in self.ctx:
             self.ctx[ativo].update(ts_ms, preco, qtd)
         # v9.37: atualizar volatilidade, retornos, tempo
+        # P0-A21 (v15.15): VolatilityTracker agora e TEMPORAL (grid de 100ms
+        # do master clock) — o ts estava disponivel aqui e nunca era passado.
         if ativo in self.vol:
-            self.vol[ativo].update(preco)
+            self.vol[ativo].update(ts_ms, preco)
+        # P0-A20 (v15.14): ReturnsTracker agora e temporal — janelas por
+        # MASTER CLOCK (ts_ms do evento), nao por contagem de trades. O ts
+        # estava disponivel aqui mas nunca era passado (rajadas de 100 trades
+        # em 20ms eram tratadas como 100 janelas de 100ms).
         if ativo in self.ret:
-            self.ret[ativo].update(preco)
+            self.ret[ativo].update(ts_ms, preco)
         self.session_time.update(ts_ms)
         # atualizar ajuste oficial D-1
         self._atualizar_ajuste_para_dia(ativo, ts_ms)
@@ -495,7 +510,8 @@ class ScorerML:
                     row['vwap_inclinacao_5m'] = 0.0
 
         # 4. Intermarket (WIN x WDO)
-        row.update(self.inter.calcular())
+        # P0-A23: ts_ms do evento — janelas relativas ao evento, nunca wall clock.
+        row.update(self.inter.calcular(ts_ms))
         
         row.update(self.session_time.snapshot(ts_ms))
 

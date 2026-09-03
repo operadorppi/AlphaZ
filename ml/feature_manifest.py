@@ -273,7 +273,12 @@ def _describe(name: str) -> str:
         
         # Cross-asset
         'cross_lag': 'Lag temporal WIN×WDO (ms)',
-        'cross_corr_aggr': 'Correlação agressão WIN×WDO',
+        # P1-A25 (v15.19): semântica explícita da correlação cross-asset.
+        # Cada lado é amostrado em buckets de 100ms (grid do master clock) e
+        # cada bucket vira UM valor: MÉDIA dos fluxos do bucket (default).
+        # Pearson sobre os buckets comuns dentro de janela_corr (60s).
+        # Veja features/cross_asset.py (docstring do módulo).
+        'cross_corr_aggr': 'Corr. fluxo agressão WIN×WDO (média/bucket 100ms)',
         'cross_divergencia': 'Divergência preço WIN×WDO',
         'wdo_leading': 'Score liderança WDO',
         'resposta_win': 'Resposta WIN a WDO',
@@ -376,7 +381,7 @@ def _describe(name: str) -> str:
         'retorno_100x100ms': 'Retorno 10s',
         'retorno_150x100ms': 'Retorno 15s',
         'retorno_300x100ms': 'Retorno 30s',
-        'retorno_500x100ms': 'Retorno 5min',
+        'retorno_500x100ms': 'Retorno 50s (500 x 100ms do master clock)',
         'vol_100ms': 'Volatilidade 100ms',
         'vol_500ms': 'Volatilidade 500ms',
         'vol_1s': 'Volatilidade 1s',

@@ -256,7 +256,19 @@ class BookLevelFeatures:
                         pares.append((pf, int(vf)))
                 except (TypeError, ValueError):
                     continue
-            return pares
+        if pares:
+            # v15.9 (P0-A12): invariante de profundidade POR PREÇO. `calcular()`
+            # trata o índice do array como nível (bid_p[0] = melhor bid, L1/L3/L5
+            # via cumsum), então os níveis DEVEM vir ordenados best-first. A ordem
+            # das linhas da janela do Profit NÃO é garantida, e um nível com
+            # preço>0/volume=0 (ordem consumida) comprimia o array deslocando a
+            # posição. Regras:
+            #   - ordena por preço: bid desc (melhor primeiro), ask asc;
+            #   - nível com volume 0 NÃO é nível em repouso (não há ordem): é
+            #     descartado da profundidade (remoção é rastreada pelo OFITracker,
+            #     que recebe as linhas com volume 0 separadamente);
+            #   - preço <= 0 ou volume <= 0 inválidos: nunca entram.
+            pares.sort(key=lambda x: x[0], reverse=(lado == 'bid'))
         return pares
 
     def _extrair_vols(self, snap, lado):

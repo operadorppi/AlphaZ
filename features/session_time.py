@@ -1,28 +1,35 @@
 # session_time_tracker.py — Tempo de sessao ao vivo (v9.40)
-# Adicionado: minutos_desde_abertura (faltava no v9.37)
+# P0-A22 (v15.16): toda conversao ts->horario de pregao usa a funcao temporal
+# OFICIAL de Brasilia (core.temporal.tod_de_ts_br). ANTES, snapshot() usava
+# `ts_ms % 86400000` cru (TOD UTC) enquanto update() usava -3h — a
+# classificacao de bloco da sessao ficava deslocada +3h (14h BRT virava
+# 17h UTC -> bloco 'fechamento' em vez de 'tarde').
 import math
 
-_ABERTURA_TOD = 9 * 3600 * 1000  # 09:00 em ms
-_FECHAMENTO_TOD = 17 * 3600 * 1000 + 45 * 60 * 1000  # 17:45
+from core.temporal import dia_de_ts_br, tod_de_ts_br
+
+_ABERTURA_TOD = 9 * 3600 * 1000  # 09:00 em ms (TOD BR)
+_FECHAMENTO_TOD = 17 * 3600 * 1000 + 45 * 60 * 1000  # 17:45 (TOD BR)
+
 
 class SessionTimeTracker:
     def __init__(self):
         self._ultimo_dia = None
 
     def update(self, ts_ms):
-        dia = (int(ts_ms) - 3*3600*1000) // 86400000
+        dia = dia_de_ts_br(ts_ms)
         if self._ultimo_dia is not None and dia != self._ultimo_dia:
             pass
         self._ultimo_dia = dia
 
     def snapshot(self, ts_ms):
-        tod = int(ts_ms) % 86400000
+        tod = tod_de_ts_br(ts_ms)
         seg_abt = max(0, (tod - _ABERTURA_TOD) / 1000)
         min_abt = seg_abt / 60.0
         min_fc = max(0, (_FECHAMENTO_TOD - tod) / 60000)
         hora_frac = (tod / 86400000.0) * 2 * math.pi
-        
-        # Bloco da sessao
+
+        # Bloco da sessao (TOD de Brasilia)
         if tod < _ABERTURA_TOD:
             bloco = 0  # pre-abertura
         elif tod < 10 * 3600 * 1000:
@@ -35,7 +42,7 @@ class SessionTimeTracker:
             bloco = 4  # tarde
         else:
             bloco = 5  # fechamento
-        
+
         return {
             "segundos_desde_abertura": round(seg_abt, 1),
             "minutos_desde_abertura": round(min_abt, 1),

@@ -192,3 +192,33 @@
 
 1. **`testes/auditoria_microestrutura.py`** — Script de auditoria automatizada
 2. **`docs/AUDITORIA_MICROESTRUTURA.md`** — Este relatório
+
+---
+
+## P1-A25 (v15.19) — Semântica formal da correlação cross-asset
+
+**Achado:** `_correlacao_rolling` agrupava por `t // 1000` e usava o **último
+valor do segundo** (`bins[b] = v` sobrescrevia). Com 100 eventos WIN no mesmo
+segundo, só o último representava o bucket — a dinâmica intrasegundo era
+perdida e a semântica ficava implícita/não documentada.
+
+**Política definida (formal, nunca implícita):**
+
+| Parâmetro | Default | Significado |
+|---|---|---|
+| `bucket_ms` | `100` | Resolução do bucket = grid do master clock (100ms), mesmo contrato temporal das demais features (A20/A21) |
+| `agregador` | `'mean'` | Representante de cada bucket: **média** dos fluxos do bucket (para aggr ±1/trade = saldo direcional médio); `'sum'` = fluxo líquido; `'last'` = último valor (comportamento antigo, só compat) |
+
+- A correlação de Pearson usa os representantes dos buckets **comuns**
+  (≥ 10) dentro de `janela_corr` (s).
+- Bucket sem evento em um lado é **gap** (não vira zero) — não fabrica amostra.
+- Implementado em `features/cross_asset.py` (docstring do módulo) e refletido
+  em `ml/feature_manifest.py`.
+- Configurável no construtor de `CrossAssetEngine`/`CrossAssetManager`
+  (keywords `bucket_ms`, `agregador`); valor inválido de `agregador` é erro
+  explícito, não comportamento silencioso.
+
+**Regressão de valores:** mudou o valor de `corr_aggr`/`corr_imb_book` no live
+(de "último por segundo" para "média por bucket de 100ms"). Essas features são
+live-only (o batch não as calcula) e não há modelo treinado em produção —
+retreino já pendente. Validado por `testes/test_cross_asset_agregacao_v1519.py`.

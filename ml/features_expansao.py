@@ -46,8 +46,13 @@ def adicionar_expansao(df, preco_col=None, ativo_col="ativo", ts_col="ts_ms"):
         df[f"retorno_{n}x100ms"] = g.transform(lambda s: s.pct_change(n))
 
     # --- 2. Volatilidade multi-TF (EWMA de |ret| em janelas) ---
+    # P0-A21 (v15.15): n = LINHAS do grid de 100ms = TEMPO REAL. Os valores
+    # antigos estavam errados para os nomes (100 linhas = 10s nao 15s;
+    # 300 = 30s nao 1min; 1500 = 150s nao 5min). O dataset_100ms tem 1 linha
+    # por corte de 100ms do master clock (forward-filled), entao pct_change(n)
+    # e ewm(alpha=2/(n+1)) medem janelas temporais reais.
     for n, nome in [(1, "100ms"), (5, "500ms"), (10, "1s"), (50, "5s"),
-                    (100, "15s"), (300, "1min"), (1500, "5min")]:
+                    (150, "15s"), (600, "1min"), (3000, "5min")]:
         ret_n = g.transform(lambda s: s.pct_change(n).abs())
         alpha = 2.0 / (n + 1)
         df[f"vol_{nome}"] = ret_n.groupby(df[ativo_col]).transform(
@@ -82,19 +87,15 @@ def adicionar_expansao(df, preco_col=None, ativo_col="ativo", ts_col="ts_ms"):
             lambda s: _safe_div(s, s.ewm(alpha=0.001, adjust=False).mean()))
 
     # --- 6. Tempo de sessao ---
-    if "fase_sessao" not in df.columns:
-        # Derivar do timestamp TOD
-        tod_ms = df[ts_col].astype("int64") % 86_400_000
-        abertura_ms = 9 * 3600 * 1000  # 09:00
-        fechamento_ms = 17 * 3600 * 1000 + 45 * 60 * 1000  # 17:45
-        df["segundos_desde_abertura"] = ((tod_ms - abertura_ms) / 1000).clip(lower=0)
-        df["minutos_ate_fechamento"] = ((fechamento_ms - tod_ms) / 60000).clip(lower=0)
-    else:
-        tod_ms = df[ts_col].astype("int64") % 86_400_000
-        abertura_ms = 9 * 3600 * 1000
-        fechamento_ms = 17 * 3600 * 1000 + 45 * 60 * 1000
-        df["segundos_desde_abertura"] = ((tod_ms - abertura_ms) / 1000).clip(lower=0)
-        df["minutos_ate_fechamento"] = ((fechamento_ms - tod_ms) / 60000).clip(lower=0)
+    # P0-A22 (v15.16): TOD de BRASILIA (epoch UTC - 3h), mesma regra das
+    # funcoes temporais oficiais (core.temporal). ANTES usava `% 86400000`
+    # cru (TOD UTC): 14h BRT virava 17h -> segundos_desde_abertura,
+    # minutos_ate_fechamento e sin/cos_horario deslocados +3h no dataset.
+    tod_ms = (df[ts_col].astype("int64") - _TZ_OFF) % 86_400_000
+    abertura_ms = 9 * 3600 * 1000  # 09:00 BRT
+    fechamento_ms = 17 * 3600 * 1000 + 45 * 60 * 1000  # 17:45 BRT
+    df["segundos_desde_abertura"] = ((tod_ms - abertura_ms) / 1000).clip(lower=0)
+    df["minutos_ate_fechamento"] = ((fechamento_ms - tod_ms) / 60000).clip(lower=0)
     # sin/cos do horario (ciclico, sem descontinuidade)
     hora_frac = (tod_ms / 86_400_000.0) * 2 * np.pi
     df["sin_horario"] = np.sin(hora_frac)

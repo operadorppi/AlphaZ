@@ -82,7 +82,13 @@ _OFFSET_LOCAL_UTC_MS = None
 
 
 def _offset_local_utc_ms():
-    """Deslocamento (ms) que a hora local adianta da UTC."""
+    """Deslocamento (ms) que a hora local adianta da UTC.
+
+    DEPRECADO (P0-A22, v15.16): o offset do SISTEMA variava com o fuso/DST
+    da maquina e criava TOD incorreto fora de America/Sao_Paulo. Use as
+    funcoes temporais oficiais em core.temporal (tod_de_ts_br / dia_de_ts_br).
+    Mantido apenas para compatibilidade de imports.
+    """
     global _OFFSET_LOCAL_UTC_MS
     if _OFFSET_LOCAL_UTC_MS is None:
         ag = datetime.now().astimezone()
@@ -99,11 +105,14 @@ def _sanitize(v):
 
 
 def _tod_de_ts(ts_ms):
-    """Normaliza timestamp para time-of-day em ms (hora local da B3)."""
-    if ts_ms and ts_ms > 1e11:
-        utc_tod = ts_ms % 86400000
-        return (utc_tod + _offset_local_utc_ms()) % 86400000
-    return ts_ms or 0
+    """Normaliza timestamp para time-of-day em ms (hora de Brasilia).
+
+    P0-A22 (v15.16): delega a funcao temporal OFICIAL (core.temporal).
+    ANTES usava o offset do fuso da maquina (_offset_local_utc_ms), que
+    quebrava em maquinas fora de America/Sao_Paulo.
+    """
+    from core.temporal import tod_de_ts_br
+    return tod_de_ts_br(ts_ms)
 
 
 INSTITUCIONAIS = {

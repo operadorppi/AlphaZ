@@ -165,12 +165,48 @@ def preparar_features(df, proibidas=None, label_col='label',
 def aplicar_encoding(df, cat_cols):
     """One-hot encoding de colunas categóricas (v9.15) — compatível com
     qualquer modelo (LightGBM, RF, XGBoost). Retorna df sem as colunas
-    originais e com as dummies. Chamado ANTES do fillna(0)."""
+    originais e com as dummies. Chamado ANTES do fillna(0).
+
+    ATENCAO (P1-A16): esta versao so deve ser usada quando o encoding e
+    feito num UNICO dataframe (sem split treino/teste). Para splits, use
+    aplicar_encoding_fit() — nunca concatene treino+teste antes do
+    get_dummies (as categorias do teste vazariam para a preparacao)."""
     if not cat_cols:
         return df
     dummies = pd.get_dummies(df[cat_cols], prefix=cat_cols, dtype=int)
     df = df.drop(columns=cat_cols)
     return pd.concat([df, dummies], axis=1)
+
+
+def aplicar_encoding_fit(X_train, X_test, cat_cols):
+    """One-hot com FIT apenas no TREINO (P1-A16).
+
+    pd.get_dummies sobre treino+teste concatenados deixava as categorias do
+    TESTE influenciarem as colunas dummies (ex.: categoria presente so no
+    teste criava coluna visivel ao modelo) — leak de preprocessing. Aqui:
+
+      fit  (categorias) -> X_train
+      transform        -> X_train e X_test com as MESMAS colunas
+
+    Categorias do teste ausentes no treino sao descartadas (invisiveis ao
+    modelo, como em producao); categorias do treino ausentes no teste viram 0.
+
+    Returns:
+        (X_train_encoded, X_test_encoded) sem as colunas originais
+    """
+    if not cat_cols:
+        return X_train, X_test
+    dummies_train = pd.get_dummies(X_train[cat_cols], prefix=cat_cols, dtype=int)
+    dummies_test = pd.get_dummies(X_test[cat_cols], prefix=cat_cols, dtype=int)
+    # Alinhar colunas do teste EXATAMENTE as do treino (fit) — categorias do
+    # teste desconhecidas no treino sao descartadas; ausentes viram 0.
+    dummies_test = dummies_test.reindex(columns=dummies_train.columns, fill_value=0)
+    Xt = X_train.drop(columns=cat_cols).reset_index(drop=True)
+    Xe = X_test.drop(columns=cat_cols).reset_index(drop=True)
+    return (
+        pd.concat([Xt, dummies_train.reset_index(drop=True)], axis=1),
+        pd.concat([Xe, dummies_test.reset_index(drop=True)], axis=1),
+    )
 
 
 def avaliar_modelo(modelo, X_test, y_test, tp_pts=50, sl_pts=30, modo='binario'):

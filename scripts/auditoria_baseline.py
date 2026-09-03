@@ -33,6 +33,7 @@ LAST_KNOWN = "50cb841"    # v15.2 — motor imortal + watchdog pré-mercado
 ARQUIVOS_CHAVE = [
     "core/market_state.py",
     "features/book_features.py",
+    "features/cross_asset.py",
     "features/feature_engine.py",
     "core/app.py",
     "core/signal_engine.py",
@@ -44,6 +45,7 @@ ARQUIVOS_CHAVE = [
     "config.json",
     "watchdog.py",
     "replay_engine.py",
+    "ml/scorer.py",
 ]
 
 

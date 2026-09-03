@@ -595,8 +595,15 @@ class TestSessao:
 
     def test_tod_de_ts(self):
         import datetime
-        epoch = int(datetime.datetime(2026, 8, 21, 10, 30, 0).timestamp() * 1000)
+        # P0-A22 (v15.16): epoch determinístico UTC -> TOD de Brasília.
+        # 13:30 UTC = 10:30 BRT (UTC-3 fixo).
+        epoch = int(datetime.datetime(2026, 8, 21, 13, 30, 0,
+                                      tzinfo=datetime.timezone.utc).timestamp() * 1000)
         assert _tod_de_ts(epoch) == 10 * 3600000 + 30 * 60000
+        # 17:00 UTC = 14:00 BRT
+        epoch2 = int(datetime.datetime(2026, 8, 21, 17, 0, 0,
+                                       tzinfo=datetime.timezone.utc).timestamp() * 1000)
+        assert _tod_de_ts(epoch2) == 14 * 3600000
         # time-of-day inalterado
         assert _tod_de_ts(37000000) == 37000000
 

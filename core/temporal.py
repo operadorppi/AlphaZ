@@ -28,9 +28,45 @@ except ImportError:
 # não temos a data completa. É recalculado a cada chamada.
 _epoch_midnight_cache = {'date': None, 'epoch_ms': 0}
 
+# P1-A18: limiar para retroceder 1 dia na reconstrução do DAT (virada de
+# meia-noite/sessão). > 6h no futuro = sessão anterior; nunca dispara em
+# sessão normal (futuro legítimo é de ms) e o validate_event_ts é a barreira
+# final. Valor conservador: folga de ~12x sobre o pior atraso real.
+_MAX_FUTURO_SESSAO_S = 6 * 3600.0
+
 # Contador global de sequência (thread-safe)
 _sequence_counter = 0
 _sequence_lock = threading.Lock()
+
+# ========================================================================
+# P0-A22: funções TEMPORAIS OFICIAIS de Brasília — FONTE ÚNICA.
+# ========================================================================
+# Epoch ms é UTC. B3 opera em America/Sao_Paulo; sem horário de verão desde
+# 2019 (Lei 13.981/2020) — UTC-3 fixo é a política vigente (2026).
+# TODO de Brasília = (ts_utc - 3h) mod 86400000; dia civil BR = (ts - 3h) // dia.
+_OFFSET_BR_MS = -3 * 3600 * 1000
+_MS_POR_DIA = 86_400_000
+
+
+def tod_de_ts_br(ts_ms) -> int:
+    """Time-of-day de Brasília (ms desde 00:00 BRT) a partir de epoch ms.
+
+    Ex.: 2026-08-29 14:00:00 BRT (= 17:00 UTC) -> 14h em ms. Aceita também
+    um TOD bruto (< 1e11), retornando-o inalterado (compatibilidade).
+    """
+    if not ts_ms:
+        return 0
+    ts_ms = int(ts_ms)
+    if ts_ms > 1e11:  # epoch ms (UTC)
+        return (ts_ms + _OFFSET_BR_MS) % _MS_POR_DIA
+    return ts_ms  # ja e TOD bruto (hora local BR assumida)
+
+
+def dia_de_ts_br(ts_ms) -> int:
+    """Dia civil de Brasília em epoch-days: (ts_utc - 3h) // 86400000."""
+    if not ts_ms:
+        return 0
+    return (int(ts_ms) - 3 * 3600 * 1000) // _MS_POR_DIA
 
 
 def next_sequence_id() -> int:
@@ -98,6 +134,19 @@ def dat_to_epoch_ms(dat_str: str, ref_dt: Optional[datetime] = None) -> int:
             hour=h, minute=m, second=sec, microsecond=ms * 1000,
             tzinfo=TZ_BR,
         )
+
+        # P1-A18: o DAT do Profit NÃO carrega data — o dia é inferido de
+        # ref_dt (default: hoje em TZ_BR). Na virada da meia-noite/sessão, um
+        # DAT de 23:59:59.xxx recebido logo após 00:00 seria montado com o dia
+        # NOVO -> futuro de ~24h -> rejeitado pelo validate_event_ts (evento
+        # perdido). Regra defensiva: se o DAT montado ficar no futuro de ref_dt
+        # por mais de uma sessão inteira (> 6h), pertence à sessão ANTERIOR —
+        # retrocede 1 dia. Determinístico (compara com ref_dt, não com now) e
+        # nunca dispara em sessão normal (futuro legítimo é de ms — o
+        # validate_event_ts ±30s é a barreira final para o resto).
+        delta_s = (dt - ref_dt).total_seconds()
+        if delta_s > _MAX_FUTURO_SESSAO_S:
+            dt = dt - timedelta(days=1)
 
         # Converter para epoch ms
         return int(dt.timestamp() * 1000)
