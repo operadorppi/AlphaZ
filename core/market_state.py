@@ -86,8 +86,13 @@ class MarketState:
         self.book_ask = [{} for _ in range(book_split)]
 
         # Estado de mercado
-        self.buffer = defaultdict(list)         # negocios do segundo atual
-        self.seg_atual = 0
+        self.buffer = defaultdict(list)         # negocios do segundo atual (POR ATIVO)
+        self.seg_atual = 0                     # relógio global (informativo, v15.6)
+        # v15.6 (P0-A06): relógio de limpeza do buffer POR ATIVO. O buffer de um
+        # ativo só fecha quando ELE avança de segundo — WIN não pode limpar o
+        # buffer do WDO (nem misturar contexto temporal entre ativos).
+        self._seg_por_ativo = {}
+        self._neg_atrasados = defaultdict(int)  # (ativo) -> trades atrasados excluídos do buffer
         self.historico = defaultdict(lambda: deque(maxlen=self.config.get("hist_segs_max", 3600)))
         self.features_por_seg = OrderedDict()    # (ativo, seg) -> features
         self.stats = defaultdict(lambda: {'n': 0, 'vc': 0, 'vv': 0, 'p0': 0.0, 'p1': 0.0})
@@ -284,14 +289,33 @@ class MarketState:
             self._ewma_ret2.clear()
             self._cvd_extremos.clear()
             self.seg_atual = 0
+            self._seg_por_ativo.clear()
             self.buffer.clear()
             self.ohlc.clear()
             self.agressao_por_corretora.clear()
 
-        # Mudança de segundo
-        if seg > self.seg_atual:
-            self.seg_atual = seg
-            self.buffer.clear()
+        # Mudança de segundo — POR ATIVO (v15.6, P0-A06)
+        # ANTES: `self.seg_atual` global + buffer.clear() — o avanço de segundo
+        # de um ativo (ex: WIN 10:00:02.000) limpava o buffer de TODOS os
+        # outros (ex: WDO ainda agregando 10:00:01.x) e um evento atrasado de
+        # outro ativo caía num buffer cujo contexto temporal já tinha mudado.
+        seg_ativo = self._seg_por_ativo.get(ativo, 0)
+        _late = False
+        if seg > seg_ativo:
+            self._seg_por_ativo[ativo] = seg
+            if seg > self.seg_atual:
+                self.seg_atual = seg  # relógio global: só informativo
+            self.buffer[ativo] = []  # fecha e isola SOMENTE o buffer deste ativo
+        elif seg < seg_ativo:
+            # Evento atrasado do PRÓPRIO ativo (segundo dele já avançou): não
+            # contamina o segundo corrente do buffer. O dado segue preservado
+            # no RAW (fonte de verdade) e contabilizado nas estatísticas — só
+            # fica fora da agregação de features do segundo atual.
+            _late = True
+            self._neg_atrasados[ativo] += 1
+            if self._neg_atrasados[ativo] <= 5 or self._neg_atrasados[ativo] % 1000 == 0:
+                log.warning(f"[SANITY] {ativo}: trade atrasado seg={seg} (< {seg_ativo}) "
+                            f"excluído do buffer de features (total {self._neg_atrasados[ativo]})")
 
         # OHLC
         _ohlc = self.ohlc[ativo]
@@ -303,10 +327,12 @@ class MarketState:
             _ohlc['minima'] = preco
         _ohlc['fechamento'] = preco
 
-        self.buffer[ativo].append({
-            'preco': preco, 'qtd': qtd, 'agressor': agr,
-            'compradora': comp, 'vendedora': vend
-        })
+        if not _late:
+            self.buffer[ativo].append({
+                'preco': preco, 'qtd': qtd, 'agressor': agr,
+                'compradora': comp, 'vendedora': vend,
+                'ts_ms': tms,  # v15.6: timestamp preservado p/ rótulo por-segundo do ativo
+            })
 
         # AccumulationTracker
         tr = self.trackers[ativo]
@@ -408,7 +434,11 @@ class MarketState:
                 'ask_vol': np.array([l.volume for l in snapshot.asks], dtype=np.float32),
                 'ask_preco': np.array([l.price for l in snapshot.asks], dtype=np.float32),
             }
-            book_level_data = blf.calcular(book_snap_dict, ativo, int(time.time() * 1000)) or {}
+            # P1-A09 (v15.7): o ts das features de book_level deve ser o ts DO
+            # SNAPSHOT (que no BOOK é o receive/observação formalizado no adapter) —
+            # nunca um time.time() novo aqui (relógio extra criava skew entre o
+            # ts do evento persistido no RAW e o ts da feature calculada).
+            book_level_data = blf.calcular(book_snap_dict, ativo, snapshot.timestamp_ms) or {}
             # Atualizar OFI tracker do feature_engine (separado do BookLevelFeatures)
             ofi_trk = self.trackers[ativo]['ofi']
             bid_levels_ofi = [(float(p), int(v)) for p, v in zip(book_snap_dict['bid_preco'][:5], book_snap_dict['bid_vol'][:5]) if p > 0]

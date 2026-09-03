@@ -56,12 +56,11 @@ class ProfitRTDAdapter(MarketDataSource):
         )
         self._tt_recebidos = defaultdict(int)  # (sym) -> total trades received (running counter)
         self._baseline_pending = defaultdict(lambda: True)
+        self._connect_ts_ms = 0  # início da captura (wall clock) — baseline compara DAT com isto
         self._cell_lote = defaultdict(dict)  # (sym, linha) -> {field: lote_num} — ciclo RefreshData de cada campo
         self._lote_atual = 0  # contador de ciclos RefreshData
         self._book_cells = defaultdict(lambda: defaultdict(dict))  # (sym, kind, janela) -> {linha: {field: val}}
         self._last_book_yield = defaultdict(float)
-        # Limite de memória para dedup (LRU eviction)
-        self._dedup_max_per_ativo = 50000  # max 50K assinaturas por ativo
 
         # Import dinâmico para não quebrar no Linux
         if os.name == 'nt':
@@ -215,8 +214,33 @@ class ProfitRTDAdapter(MarketDataSource):
             except Exception as e:
                 log.warning(f"[RTD] Erro ao desconectar: {e}")
 
+    def _deve_emitir_tt(self, sym: str, event_ts_ms: int) -> bool:
+        """Baseline R1 (v15.4): decide se uma linha T&T/RLP coerente é emitida.
+
+        Absorve SEM emitir apenas o retrato PRÉ-conexão da janela — linhas com
+        DAT anterior ao início da captura (proteção anti-duplicata quando o
+        motor (re)conecta com a janela já populada).
+
+        Trade com DAT >= início da captura é dado REAL e NUNCA é descartado:
+        encerra o baseline deste símbolo e é emitido — RAW é a fonte de
+        verdade (fix: o 1º trade do dia de cada ativo era engolido quando o
+        motor iniciava antes do pregão e a janela estava vazia na conexão).
+        """
+        if not self._baseline_pending[sym]:
+            return True
+        if event_ts_ms > 0 and event_ts_ms < self._connect_ts_ms:
+            return False  # retrato pré-conexão — continua em baseline
+        # Dado novo (DAT >= início da captura) ou DAT indeterminado: encerra
+        # baseline e emite.
+        self._baseline_pending[sym] = False
+        return True
+
     def events(self) -> Iterator[MarketEvent]:
         """Loop de polling transformado em iterador de contratos."""
+        if self._connect_ts_ms == 0:
+            self._connect_ts_ms = int(time.time() * 1000)
+            log.info(f"[RTD] Captura iniciada em ts={self._connect_ts_ms} — baseline "
+                     f"absorve só retrato pré-conexão; 1º dado novo de cada ativo é emitido")
         while not self._shutdown:
             self.com_client.PumpEvents(0.005)
             data = _refresh(self._srv)
@@ -232,7 +256,10 @@ class ProfitRTDAdapter(MarketDataSource):
                 kind, sym, field, linha, j_idx = info
 
                 if kind == "tt":
-                    # v14.5: Lógica de Dedup + coerência de lote + DAT-primário
+                    # v14.5+: coerência de lote + DAT-primário.
+                    # NENHUMA deduplicação por conteúdo (v14.7 — RTD não reenvia
+                    # linhas; cada linha coerente é um trade real, inclusive
+                    # rajadas com campos idênticos no mesmo milissegundo).
                     # O gatilho de coerência dispara em QUALQUER um dos 3 campos
                     # chave (DAT/PRE/QUL), não só no DAT. Isso resolve o race
                     # condition onde DAT chega antes de PRE/QUL no mesmo ciclo.
@@ -266,18 +293,17 @@ class ProfitRTDAdapter(MarketDataSource):
                         continue
                     
                     # v14.7: RTD nunca envia linha duplicada — nenhuma barreira
-                    # de dedup por linha. Só o baseline (1º ciclo) e a coerência
-                    # de lote filtram. Cada linha coerente é um trade real.
-                    if self._baseline_pending[sym]:
-                        continue
-
-                    self._tt_recebidos[sym] += 1
-                    
-                    # Fase 2: Preservar timestamp do mercado (DAT do Profit)
-                    # NUNCA usar wall clock como timestamp do evento.
+                    # de dedup por linha. Cada linha coerente é um trade real.
+                    # v15.4: baseline só absorve retrato pré-conexão (DAT <
+                    # início da captura) — dado novo nunca é descartado.
                     dat_str = sstr(cell.get('DAT'))
                     event_ts_ms = dat_to_epoch_ms(dat_str)
                     receive_ns = now_ns()
+
+                    if not self._deve_emitir_tt(sym, event_ts_ms):
+                        continue
+
+                    self._tt_recebidos[sym] += 1
 
                     # Se DAT invalido, usar receive_ts como fallback (documentado)
                     if event_ts_ms <= 0:
@@ -294,7 +320,10 @@ class ProfitRTDAdapter(MarketDataSource):
                     ord_result = self._ordering_detector.check(sym, event_ts_ms, receive_ns)
 
                     if ord_result.action == "REJECT":
-                        # Duplicatas e timestamps invalidos sao rejeitados
+                        # REJECT só ocorre para timestamp inválido (<= 0).
+                        # Duplicatas de timestamp são CONTADAS mas ACEITAS desde
+                        # v14.6 (burst trades legítimos da B3 — mesmo ms, mesmo
+                        # preço, mesma quantidade podem coexistir).
                         continue
 
                     if ord_result.is_late:
@@ -345,14 +374,15 @@ class ProfitRTDAdapter(MarketDataSource):
                     if qtd <= 0: continue
                     
                     # v14.7: RLP — mesmo princípio do TT, sem dedup por linha
-                    if self._baseline_pending[sym]:
+                    # v15.4: baseline só absorve retrato pré-conexão
+                    dat_str = sstr(cell.get('DAT'))
+                    event_ts_ms = dat_to_epoch_ms(dat_str)
+                    receive_ns = now_ns()
+                    if not self._deve_emitir_tt(sym, event_ts_ms):
                         continue
                     
                     self._tt_recebidos[sym] += 1
                     
-                    dat_str = sstr(cell.get('DAT'))
-                    event_ts_ms = dat_to_epoch_ms(dat_str)
-                    receive_ns = now_ns()
                     if event_ts_ms <= 0:
                         event_ts_ms = receive_ns // 1_000_000
                     
@@ -394,7 +424,14 @@ class ProfitRTDAdapter(MarketDataSource):
                             if c.get('OCP'): bids.append(BookLevel(price=fnum(c['OCP']), volume=fint(c.get('VOC')), broker=sstr(c.get('ACP'))))
                             if c.get('OVD'): asks.append(BookLevel(price=fnum(c['OVD']), volume=fint(c.get('VOV')), broker=sstr(c.get('AVD'))))
                         
-                        book_ts = int(agora*1000)
+                        # P1-A09 (v15.7): contrato temporal do BOOK. Os tópicos BOOK
+                        # do RTD NÃO carregam DAT (timestamp de exchange) — o único
+                        # tempo disponível é o da observação no poll. Formalização:
+                        #   event_ts_ms(BOOK) = receive_ts_ns // 1_000_000
+                        # ou seja, event_ts e receive_ts vêm da MESMA leitura de
+                        # relógio (now_ns) — nunca de relógios diferentes. O
+                        # `agora`/time.time() acima serve SÓ ao throttle.
+                        book_ts = receive_ns // 1_000_000
                         janela_idx = next((k for k, v in self._book_map.items() if v == sym), 0)
                         yield MarketEvent(
                             type='BOOK',
@@ -408,9 +445,11 @@ class ProfitRTDAdapter(MarketDataSource):
                             window_name=f'BOOK{janela_idx}'
                         )
             
-            # Após o primeiro RefreshData bem sucedido, desativa pendência de baseline
-            for s in self._baseline_pending: self._baseline_pending[s] = False
-
+            # v15.4: sem reset global por ciclo — o baseline de cada símbolo
+            # encerra individualmente quando chega o 1º dado com DAT >= início
+            # da captura (_deve_emitir_tt). Reset por ciclo engolia o 1º trade
+            # real de ativos que estavam vazios na conexão (ex: motor 08:45,
+            # mercado abre 09:02 — o 1º trade do dia era perdido).
             time.sleep(0.001)
 
     def get_health(self) -> dict:
@@ -425,11 +464,13 @@ class ProfitRTDAdapter(MarketDataSource):
         }
 
     def _dedup_stats(self):
-        """Retorna estatísticas de deduplicação por ativo.
+        """Retorna estatísticas de RECEBIMENTO por ativo (nome legado mantido
+        para compatibilidade com o dashboard — key JSON `dedup_stats`).
 
-        v14.4: inclui TODOS os ativos conectados (tt_map + rlp_map + book_map),
-        não só os que já tiveram trades — ativos de baixo volume (IND, DOL)
-        ou em pausa de pregão aparecem com zero em vez de sumirem do dashboard.
+        Desde v14.7 NÃO existe deduplicação por conteúdo no adapter: os
+        contadores refletem linhas COERENTES recebidas (cada uma = 1 trade),
+        não "linhas únicas após dedup". Inclui TODOS os ativos conectados
+        (tt_map + rlp_map + book_map), não só os que já tiveram trades.
         """
         # União de todos os ativos conhecidos
         todos_ativos = set(self._tt_map.values()) | set(self._rlp_map.values()) | set(self._book_map.values())
@@ -442,7 +483,8 @@ class ProfitRTDAdapter(MarketDataSource):
         return resultado
 
     def _reset_dedup(self):
-        """Reseta estado de deduplicação (para testes)."""
+        """Reseta o baseline pendente por ativo (para testes).
+        Nome legado — não existe dedup; apenas re-permite o 1º ciclo."""
         self._baseline_pending = defaultdict(lambda: True)
 
 # Re-exporta constantes dos novos módulos

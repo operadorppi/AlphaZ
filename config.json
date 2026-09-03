@@ -17,7 +17,7 @@
     ],
     "rtd": {
         "book_linhas": 500,
-        "tt_linhas": 100,
+        "tt_linhas": 500,
         "poll_s": 0.001,
         "event_pump_s": 0.005
     },

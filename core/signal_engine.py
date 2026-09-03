@@ -74,6 +74,7 @@ class SignalEngine:
         self._normalizar_score = bool(self.config.get('normalizar_score', False))
         self._zscore_trackers = {}
         self._last_seg_calc = {}  # ativo -> ultimo seg com features calculadas
+        self._seg_da_feature = {}  # ativo -> seg da feature atual em self.features (v15.5)
     
     def _get_valor_ponto(self, ativo: str) -> float:
         """Retorna o valor do ponto em reais para o ativo (B3)."""
@@ -90,6 +91,17 @@ class SignalEngine:
         # Fallback seguro para ativos desconhecidos
         return 0.20
 
+    def _persistir_feature(self, ativo: str, seg: int, f: dict) -> None:
+        """Persiste a feature consolidada de um segundo FECHADO (1 linha por seg)."""
+        if not f:
+            return
+        with self.state.lock:
+            self.state.features_por_seg[(ativo, seg)] = f
+            max_feat = self.config.get('features_seg_max', 7200)
+            while len(self.state.features_por_seg) > max_feat:
+                self.state.features_por_seg.popitem(last=False)
+        self.state.historico[ativo].append(f)
+
     def calcular(self, seg, skip_avaliar=False):
         """Calcula features do segundo para todos os ativos no buffer.
         Otimizacao: recalcula apenas se houver trades novos desde o ultimo calculo.
@@ -97,6 +109,10 @@ class SignalEngine:
         """
         for ativo, negs in list(self.state.buffer.items()):
             n_negs = len(negs)
+            # v15.6 (P0-A06): rótulo de segundo POR ATIVO. Cada ativo tem o seu
+            # próprio relógio (state._seg_por_ativo); um evento de OUTRO ativo
+            # não pode rotular nem recomputar as features deste ativo.
+            seg_ativo = int(getattr(self.state, '_seg_por_ativo', {}).get(ativo, seg))
             if getattr(self, '_batch_mode', False):
                 # Batch: so recalcula quando o segundo muda (nao a cada trade)
                 last = self._last_seg_calc.get(ativo)
@@ -104,24 +120,42 @@ class SignalEngine:
                     continue
                 self._last_seg_calc[ativo] = (ativo, seg, n_negs)
             else:
-                # Real-time: recalcula a cada trade novo
-                cache_key = (ativo, seg, n_negs)
+                # Real-time: recalcula quando o ativo tem trade NOVO (n muda)
+                # OU o próprio ativo rola de segundo (seg_ativo muda — detecta
+                # rollover com o mesmo n de trades). O seg do EVENTO de outro
+                # ativo não participa do cache: ativo sem mudança própria não é
+                # recomputado (isolamento por ativo, P0-A06).
+                cache_key = (ativo, seg_ativo, n_negs)
                 if self._last_seg_calc.get(ativo) == cache_key:
                     continue
                 self._last_seg_calc[ativo] = cache_key
 
-            f = self.feature_engine.processar_lote(ativo, negs, seg)
+            f = self.feature_engine.processar_lote(ativo, negs, seg_ativo)
             if not f:
                 continue
 
+            # P0-A05 (v15.5): 1 linha por (ativo, seg) FECHADO no histórico.
+            # A computação permanece incremental por trade (avaliação), mas a
+            # persistência (features_por_seg + historico) só recebe a feature
+            # FINAL de cada segundo. ANTES: N trades no mesmo segundo geravam
+            # N recomputes + N appends quase idênticos, e as janelas de história
+            # (aceleracao[-6], cvd_div[-10], range_vol[-60], regime.detectar)
+            # liam "6/10/60 entradas" = frações de segundo em live vs 6/10/60
+            # SEGUNDOS no batch — skew de treino/inferência.
+            if getattr(self, '_batch_mode', False):
+                # Batch (1 chamada por segundo): persiste direto — já é 1 linha/seg.
+                self._persistir_feature(ativo, seg_ativo, f)
+            else:
+                seg_ant = self._seg_da_feature.get(ativo)
+                if seg_ant is not None and seg_ant != seg_ativo:
+                    # Chegou trade do segundo seguinte DESTE ativo: fecha o
+                    # segundo anterior com a feature consolidada e persiste 1x.
+                    f_anterior = self.features.get(ativo)
+                    if f_anterior:
+                        self._persistir_feature(ativo, seg_ant, f_anterior)
+                self._seg_da_feature[ativo] = seg_ativo
             self.features[ativo] = f
-            with self.state.lock:
-                self.state.features_por_seg[(ativo, seg)] = f
-                max_feat = self.config.get('features_seg_max', 7200)
-                while len(self.state.features_por_seg) > max_feat:
-                    self.state.features_por_seg.popitem(last=False)
-            self.state.historico[ativo].append(f)
-            
+
             # Validação de registry (uma vez por sessão)
             if not hasattr(self, '_registry_validado'):
                 self._registry_validado = True

@@ -42,6 +42,39 @@ NUNCA:
   event_ts_ms = 10:35:21.481  ← PROIBIDO (wall clock)
 ```
 
+### 1.1 Contrato temporal do BOOK (P1-A09, v15.7)
+
+Os tópicos **BOOK** do RTD NÃO carregam `DAT` (timestamp de exchange) — as
+células têm apenas `OCP/VOC/ACP/OVD/VOV/AVD`. O único tempo disponível é o da
+**observação no poll**, então o contrato do BOOK é derivado por definição:
+
+| Timestamp | Campo | Origem | Unidade |
+|-----------|-------|--------|---------|
+| **event_ts_ms** | `BookSnapshot.timestamp_ms` | `receive_ts_ns // 1_000_000` (MESMA leitura de `now_ns`) | epoch ms | Observação = recebimento. Um único relógio gera os dois. |
+| **receive_ts_ns** | `BookSnapshot.received_at_ns` | `time.time_ns()` no Python | epoch ns | Momento do snapshot no processo. |
+| **sequence_id** | — (o BOOK não emite por linha; throttle 100ms) | — | — | A ordenação do BOOK é a do próprio poll. |
+
+Regras formais do BOOK:
+
+```
+SEMPRE: event_ts_ms(BOOK) = receive_ts_ns // 1_000_000   (relógio ÚNICO)
+NUNCA:  event_ts_ms(BOOK) = int(time.time() * 1000) lido NOVAMENTE
+        (uma segunda leitura em outro ponto cria skew entre o ts persistido
+        no RAW e o ts usado nas features)
+```
+
+Consequências obrigatórias (implementadas no v15.7):
+1. `adapters/profit_rtd.py` — o timestamp do snapshot é derivado de `now_ns`
+   (`receive_ns // 1_000_000`); `time.time()` restante serve só ao throttle.
+2. `core/market_state.py` — `BookLevelFeatures.calcular(...)` recebe
+   `snapshot.timestamp_ms` (o ts do evento), nunca um `time.time()` novo.
+3. No RAW (Parquet Hive) o BOOK é gravado com esse par consistente
+   (`timestamp_ms` + `received_at_ns`), permitindo replay causal.
+
+Alinhamento TT×BOOK no grid de 1s: o TT usa `DAT` (exchange); o BOOK usa o
+segundo da observação. A diferença entre os dois é a latência de poll
+(< 100ms), portanto o alinhamento por segundo é estável.
+
 ---
 
 ## 2. TIMEZONE
