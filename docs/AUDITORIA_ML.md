@@ -556,3 +556,61 @@ segment tree / first-ge).
 - `D:/MarketData/mimo/26/labels_v1530/relatorio_ab_<data>_<modo>_purge<N>.json`
 - `D:/MarketData/mimo/26/labels_v1530/labels_<ATIVO>_<data>.jsonl` (DEPOIS)
 - `D:/MarketData/mimo/26/labels_v1530_legado/labels_<ATIVO>_<data>.jsonl` (ANTES)
+
+
+---
+
+## v15.32 — Scan forward VETORIZADO (segment tree) + regeneracao full-day no RAW
+
+**Problema:** o scan linear puro Python custava ~1,5-2,3 ms/linha — o dia cheio
+de WIN (2,9M linhas) levava ~1,5-2h por semantica; full-day (4 ativos x 2
+purges) era inviavel (~6h).
+
+**Correcao em `ml/labeler_vectorizado.py`:** o scan forward (FIRST BARRIER
+WINS, horizonte por timestamp real P0-A33) foi substituido por duas segment
+trees (max/min) com consulta `first_ge`/`first_le` O(log n) por linha +
+`bisect_right` para o fim da janela. Resultado:
+- WIN 150k linhas: 2.306 us/linha -> **73 us/linha (~32x)**;
+- full-day 20260903 (4 ativos, ambos purges): **~12 min** (era ~6h projetado);
+  WIN 3 min, WDO 2 min, IND 13 s, DOL 33 s por purge.
+
+**Correcao de bug durante a implementacao:** as arvores retornavam `-1` para
+"nao encontrado" mas a decisao checava `is not None` — `-1` era tratado como
+toque com `px_l[-1]` (ultimo elemento). Corrigido retornando `None`.
+
+**Validacao (identidade com o scan linear v15.30):**
+- `vetorizado == linear` em TODAS as chaves (label, duracao_ms, preco_saida,
+  retorno_pts, tp/sl_atingido, ambiguous, outcome_raw), cenarios denso/esparso
+  x purge 0/5 x n 3k/15k x multi-ativo — diffs 0.
+- `label_array_ref` (labeler_core) diverge APENAS em `retorno_pts` sob purge>0:
+  divergencia PRE-EXISTENTE — o core mantem retorno pre-purge; a producao
+  (labeler_vectorizado) zera retorno de linhas embargadas apos o purge.
+- Suite labeler: 139 passed (test_labeler_tempo_real_v1530 + invariantes).
+
+**Resultado full-day 20260903 (v15.30 temporal, tp=20/sl=15/holding=30s):**
+
+| ativo | purge | eventos | TP% | SL% | TIMEOUT% | dur TP | dur SL | dur TO |
+|---|---|---|---|---|---|---|---|---|
+| WIN | 0 | 2.887.330 | 39,01 | 59,43 | 1,56 | 4,96 s | 4,68 s | 29,1 s |
+| WDO | 0 | 2.372.574 | 0,00 | 0,00 | 100,0 | - | - | 28,5 s |
+| IND | 0 | 228.886 | 46,46 | 51,92 | 1,62 | 6,04 s | 6,72 s | 9,96 s |
+| DOL | 0 | 584.023 | 0,00 | 0,00 | 100,0 | - | - | 25,6 s |
+| WIN | 5 | 2.953.989 | 0,05 | 0,06 | 99,89 | 3,19 s | 2,83 s | 4 ms |
+| WDO | 5 | 2.424.074 | 0,00 | 0,00 | 100,0 | - | - | 28,5 s |
+| IND | 5 | 229.872 | 0,45 | 0,35 | 99,19 | 0,56 s | 0,61 s | 0 ms |
+| DOL | 5 | 589.020 | 0,00 | 0,00 | 100,0 | - | - | 25,5 s |
+
+Leitura: (a) purge=0 mostra o label real da microestrutura — WIN/IND resolvem
+>98% das entradas em 30s (SL domina 59/52% — viés de downside do dia); (b)
+WDO/DOL com tp=20/sl=15 ficam 100% TIMEOUT: 20 pts no scale ~5k = 0,4% de
+movimento — a calibracao de barreira POR ATIVO (em unidades reais de tick)
+continua pendente; (c) purge=5 (embargo de producao) embarga quase tudo em
+fluxo de ticks densos — labels finais devem nascer no grid do dataset 100ms,
+nao no fluxo de eventos (confirmado).
+
+**Artefatos:** labels full-day (DEPOIS, v15.30) em
+`D:/MarketData/mimo/26/labels_v1530/labels_<ATIVO>_20260903.jsonl` (purge 0 e
+5, sobrescrevem o mesmo caminho; o ultimo purge escrito prevalece) e
+`scripts/comparar_labels_v1530.py --modo full --semantica depois --purge {0,5}`
+para reexecutar. O script ganhou `--semantica` (ambas/depois/antes) — o legado
+HEAD continua lento e fica para o modo amostra.

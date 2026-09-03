@@ -196,6 +196,10 @@ def salvar_labels(r, path):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--modo', choices=['amostra', 'full'], default='amostra')
+    ap.add_argument('--semantica', choices=['ambas', 'depois', 'antes'],
+                    default='ambas',
+                    help='ambas (A/B, padrao); depois = so v15.30 (full day rapido);'
+                         ' antes = so HEAD (legado)')
     ap.add_argument('--data', default='20260903')
     ap.add_argument('--tp', type=float, default=20.0)
     ap.add_argument('--sl', type=float, default=15.0)
@@ -206,10 +210,11 @@ def main():
     ap.add_argument('--ativo', default=None, help='so um ativo (WIN/WDO/IND/DOL)')
     args = ap.parse_args()
 
-    print(f'[v15.30-A/B] modo={args.modo} data={args.data} tp={args.tp} '
-          f'sl={args.sl} holding={args.holding}s purge={args.purge}s')
-    label_antes = carregar_legado()
-    print('[v15.30-A/B] labeler ANTES extraido do HEAD (semantica por linhas).')
+    print(f'[v15.30-A/B] modo={args.modo} semantica={args.semantica} data={args.data} '
+          f'tp={args.tp} sl={args.sl} holding={args.holding}s purge={args.purge}s')
+    label_antes = carregar_legado() if args.semantica in ('ambas', 'antes') else None
+    if label_antes is not None:
+        print('[v15.30-A/B] labeler ANTES extraido do HEAD (semantica por linhas).')
 
     ativos = [args.ativo] if args.ativo else ATIVOS
     relatorio = {'data': args.data, 'params': vars(args), 'ativos': {}}
@@ -225,31 +230,40 @@ def main():
         janelas = janelas_do_ativo(ts, qtd, args.modo)
         for nome, m in janelas:
             p2, t2, a2 = px[m], ts[m], at[m]
-            t0 = time.time()
-            ra = rodar_semantica(label_antes, p2, t2, a2, args.tp, args.sl,
-                                 args.holding, args.purge, args.tick)
-            dt_antes = time.time() - t0
+            if args.semantica != 'depois':
+                t0 = time.time()
+                ra = rodar_semantica(label_antes, p2, t2, a2, args.tp, args.sl,
+                                     args.holding, args.purge, args.tick)
+                dt_antes = time.time() - t0
+            else:
+                ra = None
+                dt_antes = 0.0
             t0 = time.time()
             rd = rodar_semantica(label_depois, p2, t2, a2, args.tp, args.sl,
                                  args.holding, args.purge, args.tick)
             dt_depois = time.time() - t0
-            sa, sd = resumir(ra), resumir(rd)
+            sa = resumir(ra) if ra is not None else None
+            sd = resumir(rd)
 
             # matriz de transicao ANTES(linha) x DEPOIS(coluna)
             mapa = {1: 'TP', -1: 'SL', 0: 'TIMEOUT'}
             trans = {}
-            for la in (1, -1, 0):
-                for ld in (1, -1, 0):
-                    c = int(np.sum((ra['label'] == la) & (rd['label'] == ld)
-                                   & ~ra['ambiguous'] & ~rd['ambiguous']))
-                    if c:
-                        trans[f'{mapa[la]}->{mapa[ld]}'] = c
-            mudou = int(np.sum((ra['label'] != rd['label'])
-                               & ~ra['ambiguous'] & ~rd['ambiguous']))
-            # shift de duracao entre os que NAO mudaram de outcome
-            iguais = (ra['label'] == rd['label']) & ~ra['ambiguous'] & ~rd['ambiguous']
+            mudou = 0
             shift_dur = None
-            if iguais.sum() > 0:
+            if ra is not None:
+                for la in (1, -1, 0):
+                    for ld in (1, -1, 0):
+                        c = int(np.sum((ra['label'] == la) & (rd['label'] == ld)
+                                       & ~ra['ambiguous'] & ~rd['ambiguous']))
+                        if c:
+                            trans[f'{mapa[la]}->{mapa[ld]}'] = c
+                mudou = int(np.sum((ra['label'] != rd['label'])
+                                   & ~ra['ambiguous'] & ~rd['ambiguous']))
+                # shift de duracao entre os que NAO mudaram de outcome
+                iguais = (ra['label'] == rd['label']) & ~ra['ambiguous'] & ~rd['ambiguous']
+            else:
+                iguais = None
+            if iguais is not None and iguais.sum() > 0:
                 shift_dur = {
                     'media_ms': round(float((rd['duracao_ms'][iguais]
                                              - ra['duracao_ms'][iguais]).mean()), 1),
@@ -261,19 +275,21 @@ def main():
             rel_asset['janelas'][nome] = {
                 'n_eventos': int(len(p2)),
                 'antes': sa, 'depois': sd,
-                'mudaram_outcome': mudou,
-                'pct_mudaram': round(100 * mudou / len(p2), 2),
-                'transicao': trans,
-                'shift_duracao_iguais': shift_dur,
+                'mudaram_outcome': mudou if ra is not None else None,
+                'pct_mudaram': (round(100 * mudou / len(p2), 2)
+                                if ra is not None else None),
+                'transicao': trans if ra is not None else None,
+                'shift_duracao_iguais': shift_dur if ra is not None else None,
                 'seg_antes': round(dt_antes, 1),
                 'seg_depois': round(dt_depois, 1),
             }
 
             print(f'\n--- janela {nome} ({len(p2):,} eventos) '
                   f'[antes {dt_antes:.1f}s | depois {dt_depois:.1f}s] ---')
-            print(f'  ANTES : TP {sa["pct_TP"]:6.2f}%  SL {sa["pct_SL"]:6.2f}%  '
-                  f'TIMEOUT {sa["pct_TIMEOUT"]:6.2f}%  | dur TP {sa["dur_media_ms_TP"]:8.0f}ms  '
-                  f'dur SL {sa["dur_media_ms_SL"]:8.0f}ms  dur TO {sa["dur_media_ms_TIMEOUT"]:8.0f}ms')
+            if sa is not None:
+                print(f'  ANTES : TP {sa["pct_TP"]:6.2f}%  SL {sa["pct_SL"]:6.2f}%  '
+                      f'TIMEOUT {sa["pct_TIMEOUT"]:6.2f}%  | dur TP {sa["dur_media_ms_TP"]:8.0f}ms  '
+                      f'dur SL {sa["dur_media_ms_SL"]:8.0f}ms  dur TO {sa["dur_media_ms_TIMEOUT"]:8.0f}ms')
             print(f'  DEPOIS: TP {sd["pct_TP"]:6.2f}%  SL {sd["pct_SL"]:6.2f}%  '
                   f'TIMEOUT {sd["pct_TIMEOUT"]:6.2f}%  | dur TP {sd["dur_media_ms_TP"]:8.0f}ms  '
                   f'dur SL {sd["dur_media_ms_SL"]:8.0f}ms  dur TO {sd["dur_media_ms_TIMEOUT"]:8.0f}ms')
@@ -287,12 +303,13 @@ def main():
             out_ant = OUT_BASE / 'labels_v1530_legado' / f'labels_{asset}_{args.data}.jsonl'
             out_dep = OUT_BASE / 'labels_v1530' / f'labels_{asset}_{args.data}.jsonl'
             if args.modo == 'full':
-                salvar_labels(ra, out_ant)
+                if ra is not None:
+                    salvar_labels(ra, out_ant)
                 salvar_labels(rd, out_dep)
                 print(f'  labels salvos: {out_dep}')
 
-        # agrega por ativo no modo amostra: soma as janelas
-        if args.modo == 'amostra':
+        # agrega por ativo (amostra: soma das janelas; full: janela unica)
+        if True:
             tot = {k: 0 for k in rel_asset['janelas']}
             agg_antes = {k: 0 for k in ('TP', 'SL', 'TIMEOUT', 'AMBIGUO')}
             agg_depois = dict(agg_antes)
@@ -300,20 +317,25 @@ def main():
             for nome, j in rel_asset['janelas'].items():
                 ntot += j['n_eventos']
                 for k in agg_antes:
-                    agg_antes[k] += j['antes'][k]
+                    if j['antes'] is not None:
+                        agg_antes[k] += j['antes'][k]
                     agg_depois[k] += j['depois'][k]
             if ntot:
                 rel_asset['agregado'] = {
                     'n_eventos': ntot,
-                    'antes': {k: {'n': v, 'pct': round(100 * v / ntot, 2)}
-                              for k, v in agg_antes.items()},
+                    'antes': ({k: {'n': v, 'pct': round(100 * v / ntot, 2)}
+                               for k, v in agg_antes.items()}
+                              if agg_antes.get('TP', 0) or agg_antes.get('SL', 0)
+                              or agg_antes.get('TIMEOUT', 0) else None),
                     'depois': {k: {'n': v, 'pct': round(100 * v / ntot, 2)}
                                for k, v in agg_depois.items()},
                 }
-                print(f'\n=== AGREGADO {asset} ({ntot:,} eventos amostrados) ===')
-                print(f'  ANTES : TP {100*agg_antes["TP"]/ntot:6.2f}%  SL '
-                      f'{100*agg_antes["SL"]/ntot:6.2f}%  TIMEOUT '
-                      f'{100*agg_antes["TIMEOUT"]/ntot:6.2f}%')
+                print(f'\n=== AGREGADO {asset} ({ntot:,} eventos) ===')
+                if agg_antes.get('TP', 0) or agg_antes.get('SL', 0) \
+                        or agg_antes.get('TIMEOUT', 0):
+                    print(f'  ANTES : TP {100*agg_antes["TP"]/ntot:6.2f}%  SL '
+                          f'{100*agg_antes["SL"]/ntot:6.2f}%  TIMEOUT '
+                          f'{100*agg_antes["TIMEOUT"]/ntot:6.2f}%')
                 print(f'  DEPOIS: TP {100*agg_depois["TP"]/ntot:6.2f}%  SL '
                       f'{100*agg_depois["SL"]/ntot:6.2f}%  TIMEOUT '
                       f'{100*agg_depois["TIMEOUT"]/ntot:6.2f}%')

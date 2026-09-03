@@ -17,6 +17,7 @@ Uso:
 """
 import argparse
 import json
+from bisect import bisect_right
 import numpy as np
 from pathlib import Path
 
@@ -91,48 +92,129 @@ def label_vectorizado(precos, ts_ms, ativos,
     sl_atingido = np.zeros(n, dtype=bool)
     ambiguous = np.zeros(n, dtype=bool)
 
+    # v15.32: scan forward VETORIZADO — segment trees (max/min) com consulta
+    # first_ge/first_le O(log n) por linha (antes: O(n * janela) puro Python,
+    # ~2 ms/linha -> dia inteiro de WIN em ~2h). Semantica IDENTICA ao scan
+    # linear P0-A33 v15.30: horizonte por timestamp real, FIRST BARRIER WINS,
+    # duracao = delta real de timestamps.
+    ts_l = ts_ms.tolist()
+    px_l = precos.tolist()
+
     # Segmentos (ativo+dia)
     segs = _segmentos(ts_ms, ativos)
 
+    # ── Segment trees sobre o array inteiro; consultas limitadas por segmento
+    N = 1 << (n - 1).bit_length()
+    t_max = np.full(2 * N, -np.inf)
+    t_min = np.full(2 * N, np.inf)
+    t_max[N:N + n] = precos
+    t_min[N:N + n] = precos
+    for h in range(1, N.bit_length()):
+        st = N >> h
+        en = N >> (h - 1)
+        t_max[st:en] = np.maximum(t_max[2 * st:2 * en:2],
+                                  t_max[2 * st + 1:2 * en:2])
+        t_min[st:en] = np.minimum(t_min[2 * st:2 * en:2],
+                                  t_min[2 * st + 1:2 * en:2])
+
+    def _first_ge(lo, hi, v):
+        """Menor indice em [lo, hi) com preco >= v, ou None. Iterativo."""
+        if lo >= hi:
+            return None
+        l = lo + N
+        r = hi + N
+        left = []
+        right = []
+        while l < r:
+            if l & 1:
+                left.append(l)
+                l += 1
+            if r & 1:
+                r -= 1
+                right.append(r)
+            l >>= 1
+            r >>= 1
+        for node in left:
+            if t_max[node] < v:
+                continue
+            while node < N:
+                if t_max[2 * node] >= v:
+                    node *= 2
+                else:
+                    node = 2 * node + 1
+            return node - N
+        for node in reversed(right):
+            if t_max[node] < v:
+                continue
+            while node < N:
+                if t_max[2 * node] >= v:
+                    node *= 2
+                else:
+                    node = 2 * node + 1
+            return node - N
+        return None
+
+    def _first_le(lo, hi, v):
+        """Menor indice em [lo, hi) com preco <= v, ou None. Iterativo."""
+        if lo >= hi:
+            return None
+        l = lo + N
+        r = hi + N
+        left = []
+        right = []
+        while l < r:
+            if l & 1:
+                left.append(l)
+                l += 1
+            if r & 1:
+                r -= 1
+                right.append(r)
+            l >>= 1
+            r >>= 1
+        for node in left:
+            if t_min[node] > v:
+                continue
+            while node < N:
+                if t_min[2 * node] <= v:
+                    node *= 2
+                else:
+                    node = 2 * node + 1
+            return node - N
+        for node in reversed(right):
+            if t_min[node] > v:
+                continue
+            while node < N:
+                if t_min[2 * node] <= v:
+                    node *= 2
+                else:
+                    node = 2 * node + 1
+            return node - N
+        return None
+
     # ══════════════════════════════════════════════════════════
-    # SCAN FORWARD por segmento — FIRST BARRIER WINS
+    # SCAN FORWARD por segmento — FIRST BARRIER WINS (O(n log n))
     # ══════════════════════════════════════════════════════════
     for s in range(len(segs) - 1):
         seg_ini = segs[s]
         seg_fim = segs[s + 1]
 
         for i in range(seg_ini, seg_fim):
-            P0 = precos[i]
+            P0 = px_l[i]
             tp_barrier = P0 + tp_pts
             sl_barrier = P0 - sl_pts
 
-            # Janela real: todos os eventos com ts <= ts[i] + holding
-            # (respeitando o fim do segmento). FIRST BARRIER WINS.
-            horizonte_ts = ts_ms[i] + max_holding_ms
+            # Janela real: eventos com ts <= ts[i] + holding (dentro do
+            # segmento). FIRST BARRIER WINS.
+            horizonte_ts = ts_l[i] + max_holding_ms
+            hi = bisect_right(ts_l, horizonte_ts, i + 1, seg_fim)
 
-            # Scan forward: primeiro toque (indice absoluto p/ ts real)
-            tick_tp = None
-            tick_sl = None
-            preco_tp = P0
-            preco_sl = P0
-            j = i + 1
-            while j < seg_fim and ts_ms[j] <= horizonte_ts:
-                P = precos[j]
-
-                if tick_tp is None and P >= tp_barrier:
-                    tick_tp = j
-                    preco_tp = P
-
-                if tick_sl is None and P <= sl_barrier:
-                    tick_sl = j
-                    preco_sl = P
-
-                if tick_tp is not None and tick_sl is not None:
-                    break
-                j += 1
+            tick_tp = _first_ge(i + 1, hi, tp_barrier)
+            tick_sl = _first_le(i + 1, hi, sl_barrier)
+            preco_tp = px_l[tick_tp] if tick_tp is not None else P0
+            preco_sl = px_l[tick_sl] if tick_sl is not None else P0
 
             def _dur(idx):
-                return max(0, int(ts_ms[idx]) - int(ts_ms[i]))
+                return max(0, int(ts_l[idx]) - int(ts_l[i]))
 
             # ══════════════════════════════════════════════
             # DECISAO — FIRST BARRIER WINS
@@ -180,7 +262,7 @@ def label_vectorizado(precos, ts_ms, ativos,
                 # TIMEOUT: sem barreira dentro do holding REAL. Duracao =
                 # tempo real ate o ultimo evento da janela (ou 0 sem eventos).
                 outcome_raw[i] = TIMEOUT_VALUE
-                ultimo = j - 1
+                ultimo = hi - 1
                 duracao_ms[i] = _dur(ultimo) if ultimo > i else 0
                 preco_saida[i] = P0
 
@@ -199,7 +281,7 @@ def label_vectorizado(precos, ts_ms, ativos,
         for i in range(n):
             if i in seg_inicios:
                 ultimo_fim_ts = -999999999
-            ts = ts_ms[i]
+            ts = ts_l[i]
             if ts - ultimo_fim_ts < purge_ms:
                 labels[i] = TIMEOUT_VALUE
                 outcome_raw[i] = TIMEOUT_VALUE
