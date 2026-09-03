@@ -16,16 +16,12 @@ class FeatureEngine:
         if not negs:
             return None
 
-        # Deduplicação de eventos (v10.2)
-        vistos = set()
-        negs_unicos = []
-        for n in negs:
-            sig = (n['preco'], n['qtd'], n['agressor'], n.get('compradora'), n.get('vendedora'))
-            if sig not in vistos:
-                vistos.add(sig)
-                negs_unicos.append(n)
-        
-        negs = negs_unicos
+        # v15.8 (EVENTO != FEATURE): NENHUMA deduplicação por conteúdo aqui.
+        # Cada linha do buffer = 1 evento real (o adapter desde v14.7 nunca
+        # deduplica e o RTD não reenvia linha). 100 eventos idênticos no mesmo
+        # milissegundo SÃO 100 eventos e devem entrar na agregação: n=100,
+        # vol_total=100 etc. Deduplicar por assinatura aqui subestimava rajadas
+        # legítimas (mesmo preço/qtd/agressor/corretoras) nas features do ML.
         # Vetorização NumPy das métricas de agressão e preço (v10.5)
         v_arr = np.array([x['qtd'] for x in negs], dtype=np.int32)
         p_arr = np.array([x['preco'] for x in negs if x['preco'] > 0], dtype=np.float32)
