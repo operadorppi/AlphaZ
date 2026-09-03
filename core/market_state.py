@@ -179,7 +179,11 @@ class MarketState:
         """
         if preco <= 0:
             return False
-        for prefixo, (lo, hi) in self.config.get("faixas_preco", {}).items():
+        # Guarda defensiva: config nunca deve ser None neste hot path.
+        # (v14.8: fallback no __init__ garante dict; esta linha torna o P0
+        # estruturalmente impossível mesmo se alguém injetar None depois.)
+        cfg = self.config or {}
+        for prefixo, (lo, hi) in cfg.get("faixas_preco", {}).items():
             if sym.upper().startswith(prefixo):
                 if not (lo <= preco <= hi):
                     self._anomalias_preco[sym] += 1
