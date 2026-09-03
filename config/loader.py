@@ -24,7 +24,7 @@ Regras:
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Mapping
@@ -131,7 +131,7 @@ class Config:
     sources: Mapping[str, str]  # chave -> origem (P1..P4) para auditoria
     legacy_used: tuple[str, ...] = ()  # chaves legadas que foram renomeadas
     warnings: tuple[str, ...] = ()
-    extra: Mapping[str, Any] = ()  # chaves operacionais (ativos, rtd, etc.)
+    extra: Mapping[str, Any] = field(default_factory=dict)  # chaves operacionais (ativos, rtd, etc.)
 
     def __getitem__(self, key: str) -> Any:
         """Acesso dict-like para compatibilidade: config['ativos']."""

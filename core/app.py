@@ -212,7 +212,6 @@ class App:
             else:
                 # Tentar validar o replay (simplificado - em produção real, validar métricas)
                 try:
-                    import json
                     with open(REPLAY_JSON, encoding='utf-8') as f:
                         replay = json.load(f)
                     # Verificar critérios básicos
@@ -720,8 +719,6 @@ class App:
         Implementa: pregão (seg-sex 8:45-18:30), cooldown 30s, check por ativo.
         Return: True se reconexão foi acionada, False caso contrário.
         """
-        from core.market_state import check_staleness
-
         if not getattr(self, '_conexao_ok', True):
             return False
 

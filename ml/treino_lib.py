@@ -189,7 +189,6 @@ def avaliar_modelo(modelo, X_test, y_test, tp_pts=50, sl_pts=30, modo='binario')
         accuracy_score, roc_auc_score, confusion_matrix,
         precision_score, recall_score, f1_score,
     )
-    import numpy as np
 
     y_pred = modelo.predict(X_test)
 

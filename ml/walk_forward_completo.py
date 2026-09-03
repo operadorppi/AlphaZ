@@ -300,6 +300,8 @@ if __name__ == '__main__':
     abl_r = ablacao(modelo, X_cols, df)
     rob_r = robustez()
     # wf_r is the result dict directly, not nested
-    wf_wrapped = {'global': wf_r, 'features': dict(list(zip(list(imp.index), imp.values))) if 'imp' in dir() else {}}
+    # v14.8: 'imp' era local de walk_forward() — a expressão era código morto
+    # (sempre {}); as importâncias reais já vêm em wf_r['features'].
+    wf_wrapped = {'global': wf_r, 'features': (wf_r or {}).get('features', {})}
     relatorio(wf_wrapped, abl_r, rob_r)
     print('\nConcluido!')

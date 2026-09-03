@@ -492,7 +492,7 @@ def step_registry_validation():
         
         # Teste 4: Export JSON
         print('  Teste 4: Export JSON')
-        import tempfile, os
+        import tempfile
         tmp = os.path.join(tempfile.gettempdir(), 'test_registry.json')
         REGISTRY.to_json(tmp)
         if os.path.exists(tmp):
@@ -527,7 +527,7 @@ def step_journal_validation():
     failed = 0
     
     try:
-        from core.decision_journal import DecisionJournal, DecisionEntry
+        from core.decision_journal import DecisionJournal, TradeDecision
         import tempfile, shutil
         
         tmpdir = tempfile.mkdtemp()
@@ -537,8 +537,10 @@ def step_journal_validation():
             
             # Teste 1: Registrar decisão
             print('  Teste 1: Registrar decisão')
-            entry = DecisionEntry(
-                ts_ms=1787948721410,
+            entry = TradeDecision(
+                # valor de teste em ms convertido para segundos (unix)
+                timestamp_do_evento=1787948721.410,
+                timestamp_de_processamento=1787948721.410,
                 ativo='WINV26',
                 acao='ABRIR',
                 lado='C',

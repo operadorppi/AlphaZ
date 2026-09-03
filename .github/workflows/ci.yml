@@ -6,12 +6,107 @@ on:
   pull_request:
   workflow_dispatch:
 
+# FASE 17 — pipeline completo: lint, typecheck, unit/integration, leakage,
+# determinismo, build e validação de artefato. Nenhuma alteração estrutural
+# deve ser considerada concluída sem passar por esta suíte.
+#
+# Convenções:
+#   - Windows (projeto é Windows-only — RTD/COM via comtypes)
+#   - Python 3.14 (mesma versão do ambiente de produção)
+#   - Jobs separados: rodam em paralelo e isolam falhas por categoria
+
+env:
+  PYTHONUNBUFFERED: "1"
+
 jobs:
+  # ------------------------------------------------------------------
+  # Lint — erros reais (nome indefinido, chave duplicada, redefinição)
+  # ------------------------------------------------------------------
+  lint:
+    name: Lint (flake8 F/E9)
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Instalar flake8
+        run: pip install flake8
+      - name: flake8 (F821/F822/F823/F601/F811/E9)
+        run: |
+          python -m flake8 --select=F821,F822,F823,F601,F811,E9 `
+            --exclude=testes,tests,docs,legacy,archive,build,dist,.git,.ci_venv .
+        shell: pwsh
+
+  # ------------------------------------------------------------------
+  # Typecheck — mypy no pacote de configuração (anotado)
+  # ------------------------------------------------------------------
+  typecheck:
+    name: Typecheck (mypy config/)
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Instalar mypy
+        run: pip install mypy
+      - name: mypy config/
+        run: python -m mypy config/ --ignore-missing-imports
+
+  # ------------------------------------------------------------------
+  # Leakage — proibido futuro em features/labels (FASE 7)
+  # ------------------------------------------------------------------
+  leakage:
+    name: Testes de leakage (FASE 7)
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Instalar dependências
+        run: pip install pyarrow lightgbm numpy pandas structlog pytest comtypes
+      - name: pytest leakage + causalidade
+        run: |
+          python -m pytest tests/test_no_future_leakage.py `
+            testes/test_leakage_duracao_label.py `
+            testes/test_leakage_preco_saida.py `
+            -q --no-header -p no:cacheprovider
+        shell: pwsh
+
+  # ------------------------------------------------------------------
+  # Determinismo — mesma entrada, mesma saída (FASE 17)
+  # ------------------------------------------------------------------
+  determinism:
+    name: Testes de determinismo (FASE 17)
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Instalar dependências
+        run: pip install pyarrow lightgbm numpy pandas structlog pytest comtypes
+      - name: pytest audit + parity + determinismo
+        run: |
+          python -m pytest tests/test_audit.py `
+            tests/test_feature_parity.py `
+            tests/test_feature_parity_batch_live.py `
+            -q --no-header -p no:cacheprovider
+        shell: pwsh
+
+  # ------------------------------------------------------------------
+  # Unit + integração — suíte completa
+  # ------------------------------------------------------------------
   tests:
-    name: Testes (Windows / Python 3.14)
+    name: Suíte completa (tests/ + testes/)
     runs-on: windows-latest
     timeout-minutes: 20
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -30,7 +125,7 @@ jobs:
         run: |
           python -c "
           import pathlib, py_compile
-          skip = {'__pycache__', 'docs', 'legacy', 'archive', 'dist', 'build', '.git'}
+          skip = {'__pycache__', 'docs', 'legacy', 'archive', 'dist', 'build', '.git', '.ci_venv'}
           falhas = []
           for p in pathlib.Path('.').rglob('*.py'):
               if any(s in p.parts for s in skip):
@@ -52,3 +147,34 @@ jobs:
       - name: Validação App() (import do motor)
         run: |
           python -c "import sys; sys.path.insert(0,'.'); from core.app import App; App(); print('App OK')"
+
+  # ------------------------------------------------------------------
+  # Build + validação do artefato (FASE 17)
+  # ------------------------------------------------------------------
+  build:
+    name: Build + validação do artefato
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Instalar build
+        run: pip install build
+      - name: Build (sdist + wheel)
+        run: python -m build
+      - name: Validar artefato (instalar wheel em venv limpo)
+        run: |
+          python -m venv .ci_venv
+          $wheel = (Get-ChildItem -Path dist -Filter *.whl | Select-Object -First 1).FullName
+          .ci_venv/Scripts/python -m pip install $wheel
+          .ci_venv/Scripts/python -c "
+          import exposure, mlgate, replaygate, config
+          from config import load_config
+          cfg = load_config()
+          assert cfg.environment, 'config não carregou'
+          print('Artefato OK — wheel instalável e importável')
+          "
+      - name: Listar artefatos
+        run: Get-ChildItem dist | Select-Object Name, Length

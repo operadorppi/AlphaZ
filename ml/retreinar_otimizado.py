@@ -98,7 +98,6 @@ def main():
     
     # Verificar se modelo antigo é válido
     if os.path.exists(MODELO_OUT):
-        import pickle
         with open(MODELO_OUT, 'rb') as f:
             old_blob = pickle.load(f)
         old_hash = old_blob.get('dataset_hash', '')

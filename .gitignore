@@ -20,10 +20,13 @@ wheels/
 .installed.cfg
 *.egg
 
-# Virtual Environment
-venv/
-env/
-ENV/
+# Pytest
+.pytest_cache/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
 
 # IDE
 .vscode/
@@ -32,43 +35,36 @@ ENV/
 *.swo
 *~
 
-# OS
-.DS_Store
-Thumbs.db
+# Environment
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Config files de teste (não commitar secrets)
+config.json
+
+# Docs gerados
+docs/*.pdf
+docs/*.pptx
 
 # Logs
 *.log
-motor_stdout*.log
-.watchdog.lock
+logs/
 
-# Dados sensíveis (não subir)
-config_local.json
-.env
+# Arquivos temporários do Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
 
-# Dados de mercado (não subir — muito grandes)
-D:/MarketData/mimo/raw_*.jsonl
-D:/MarketData/mimo/decisoes_*.jsonl
-D:/MarketData/mimo/learning_state.json
-D:/MarketData/mimo/feature_cache/
-D:/MarketData/mimo/26/*.parquet
-D:/MarketData/mimo/26/*.pkl
-D:/MarketData/mimo/26/*.csv
+# macOS
+.DS_Store
 
-# Modelos ML
-models/
-calibration_state.json
+# Agnes/AI tools
+.agnes/
+.agents/
 
-# Test report
-test_report.json
-.feature_registry.json
-
-# Temp
-*.tmp
-*.temp
-.auto_sync.pid
-
-# Dados grandes (não subir)
-dados/
-*.zip
-*.db
-.freebuff/
+# Venv local de validação de artefato (CI build job)
+.ci_venv/

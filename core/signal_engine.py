@@ -55,7 +55,6 @@ class SignalEngine:
         if feature_engine is not None:
             self.feature_engine = feature_engine
         else:
-            from features.feature_engine import FeatureEngine
             self.feature_engine = FeatureEngine(self.state, config=self.config)
 
         self.risk = risk

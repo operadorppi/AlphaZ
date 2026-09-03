@@ -26,8 +26,9 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import roc_auc_score
 
-from walk_forward_v914_limpo import metricas, PROIBIDAS, PURGE_S, EMBARGO_S, COSTO, SEED, THRESHOLDS, THRESH_PRINCIPAL, MIN_TREINO_DIAS
-from features_contexto_preco import adicionar_contexto_preco
+from ml.walk_forward_v914_limpo import PROIBIDAS, PURGE_S, EMBARGO_S, SEED, THRESHOLDS, THRESH_PRINCIPAL, MIN_TREINO_DIAS, CUSTO_PTS as COSTO
+from ml.comparar_contexto_preco import metricas
+from ml.features_contexto_preco import adicionar_contexto_preco
 
 BASE_PATH = 'D:/MarketData/mimo/dataset_final.parquet'
 BASELINE_JSON = 'walk_forward_v914_limpo.json'

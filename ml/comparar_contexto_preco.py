@@ -190,7 +190,7 @@ def run_walk_forward(df, feat_cols, label='baseline'):
                     callbacks=[lgb.early_stopping(50, verbose=False),
                                lgb.log_evaluation(0)])
         else:
-            from sklearn.ensemble import RandomForestClassifier
+            from sklearn.ensemble import RandomForestClassifier  # noqa: F811 (fallback condicional)
             clf = RandomForestClassifier(n_estimators=200, max_depth=12,
                                          n_jobs=2, random_state=SEED)
             clf.fit(Xarr[tr_mask], y[tr_mask])

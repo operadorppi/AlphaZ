@@ -89,7 +89,6 @@ def avaliar_completo(modelo, X_test, y_test, tp_pts=TP_PTS, sl_pts=SL_PTS):
     TN é "não trade" — não gera P&L.
     """
     from sklearn.metrics import accuracy_score, roc_auc_score, confusion_matrix, precision_score, recall_score
-    import numpy as np
 
     y_pred = modelo.predict(X_test)
 

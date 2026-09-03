@@ -1,0 +1,87 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+# v14.8: backend inválido ('setuptools.backends._legacy' não existe) — o build
+# falhava com BackendUnavailable. __legacy__ preserva a compat com
+# [tool.setuptools.packages.find] (PEP 517/518).
+build-backend = "setuptools.build_meta:__legacy__"
+
+[project]
+name = "exposure-financeira"
+version = "15.0.0"
+description = "Sistema de exposição financeira, gate ML e replay gate com configuração centralizada"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "Agente"},
+]
+keywords = ["finance", "trading", "risk", "exposure", "ml-gate", "replay"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+]
+
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "coverage[toml]>=7.0",
+]
+lint = [
+    "flake8>=6.0",
+    "black>=23.0",
+    "isort>=5.12",
+]
+typecheck = [
+    "mypy>=1.0",
+    "types-setuptools",
+]
+
+[project.urls]
+Documentation = "https://github.com/user/repo#readme"
+Repository = "https://github.com/user/repo.git"
+Issues = "https://github.com/user/repo/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["exposure*", "mlgate*", "replaygate*", "config*", "core*"]
+
+[tool.setuptools.package-data]
+"*" = ["*.md", "*.txt"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-v --tb=short"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.coverage.run]
+source = ["exposure", "mlgate", "replaygate", "config"]
+branch = true
+omit = ["tests/*", "examples/*"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 80
+
+[tool.black]
+line-length = 88
+target-version = ["py310"]
+
+[tool.isort]
+profile = "black"
+line_length = 88
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
