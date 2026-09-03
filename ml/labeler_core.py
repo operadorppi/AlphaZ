@@ -34,71 +34,109 @@ class LabelResult:
 
 def label_ponto_ref(precos: np.ndarray, i: int,
                     tp_pts: float, sl_pts: float,
-                    max_holding_ms: int, tick_ms: int = 100,
+                    max_holding_ms: int, ts_ms: Optional[np.ndarray] = None,
+                    tick_ms: int = 100,
                     seg_fim: Optional[int] = None,
                     direction: int = 1) -> LabelResult:
-    """Calcula o label canônico para um unico ponto i."""
+    """Calcula o label canônico para um unico ponto i.
+
+    P0-A33 (v15.30): quando `ts_ms` e fornecido, o horizonte de holding e
+    TEMPO REAL (ts[i] + max_holding_ms) e os eventos dentro desse intervalo
+    sao varridos — duracao_ms e o delta REAL de timestamps, nunca
+    "linhas * tick_ms" (dados RAW sao irregulares; N linhas != N*100ms).
+    Quando `ts_ms` e None, mantem a semantica LEGACY por contagem de linhas
+    (usada pelas APIs puras por indice nos testes de invariante) — nunca
+    usar em pipeline real.
+    """
     P0 = float(precos[i])
     n = len(precos)
     limite = n if seg_fim is None else min(n, seg_fim)
-    ahead_ticks = max_holding_ms // tick_ms
-    max_dt = min(ahead_ticks, limite - i - 1)
 
-    if max_dt <= 0:
-        return LabelResult(
-            outcome=LabelOutcome.TIMEOUT,
-            preco_saida=P0,
-            duracao_ms=0 if max_holding_ms == 0 else min(max_holding_ms, max(0, max_dt * tick_ms)),
-            retorno_pts=0.0,
-            tp_atingido=False,
-            sl_atingido=False,
-            ambiguous=False,
-        )
+    # ----------------------------------------------------------
+    # SEM ts_ms: legado por contagem de linhas (regras puras por indice)
+    # ----------------------------------------------------------
+    if ts_ms is None:
+        ahead_ticks = max_holding_ms // tick_ms
+        max_dt = min(ahead_ticks, limite - i - 1)
 
-    if direction == 1:
-        tp_barrier = P0 + tp_pts
-        sl_barrier = P0 - sl_pts
-    else:
-        tp_barrier = P0 - tp_pts
-        sl_barrier = P0 + sl_pts
-
-    tick_tp = None
-    tick_sl = None
-    preco_tp = P0
-    preco_sl = P0
-
-    for dt in range(1, max_dt + 1):
-        P = float(precos[i + dt])
-        if direction == 1:
-            if tick_tp is None and P >= tp_barrier:
-                tick_tp = dt
-                preco_tp = P
-            if tick_sl is None and P <= sl_barrier:
-                tick_sl = dt
-                preco_sl = P
-        else:
-            if tick_tp is None and P <= tp_barrier:
-                tick_tp = dt
-                preco_tp = P
-            if tick_sl is None and P >= sl_barrier:
-                tick_sl = dt
-                preco_sl = P
-
-        if tick_tp is not None and tick_sl is not None:
-            break
-
-    if tick_tp is not None and tick_sl is not None:
-        if tick_tp == tick_sl:
+        if max_dt <= 0:
             return LabelResult(
-                outcome=LabelOutcome.AMBIGUOUS,
-                preco_saida=(preco_tp + preco_sl) / 2.0,
-                duracao_ms=tick_tp * tick_ms,
+                outcome=LabelOutcome.TIMEOUT,
+                preco_saida=P0,
+                duracao_ms=0 if max_holding_ms == 0 else min(
+                    max_holding_ms, max(0, max_dt * tick_ms)),
                 retorno_pts=0.0,
                 tp_atingido=False,
                 sl_atingido=False,
-                ambiguous=True,
+                ambiguous=False,
             )
-        elif tick_tp < tick_sl:
+
+        if direction == 1:
+            tp_barrier = P0 + tp_pts
+            sl_barrier = P0 - sl_pts
+        else:
+            tp_barrier = P0 - tp_pts
+            sl_barrier = P0 + sl_pts
+
+        tick_tp = None
+        tick_sl = None
+        preco_tp = P0
+        preco_sl = P0
+
+        for dt in range(1, max_dt + 1):
+            P = float(precos[i + dt])
+            if direction == 1:
+                if tick_tp is None and P >= tp_barrier:
+                    tick_tp = dt
+                    preco_tp = P
+                if tick_sl is None and P <= sl_barrier:
+                    tick_sl = dt
+                    preco_sl = P
+            else:
+                if tick_tp is None and P <= tp_barrier:
+                    tick_tp = dt
+                    preco_tp = P
+                if tick_sl is None and P >= sl_barrier:
+                    tick_sl = dt
+                    preco_sl = P
+
+            if tick_tp is not None and tick_sl is not None:
+                break
+
+        if tick_tp is not None and tick_sl is not None:
+            if tick_tp == tick_sl:
+                return LabelResult(
+                    outcome=LabelOutcome.AMBIGUOUS,
+                    preco_saida=(preco_tp + preco_sl) / 2.0,
+                    duracao_ms=tick_tp * tick_ms,
+                    retorno_pts=0.0,
+                    tp_atingido=False,
+                    sl_atingido=False,
+                    ambiguous=True,
+                )
+            elif tick_tp < tick_sl:
+                ret = (preco_tp - P0) if direction == 1 else (P0 - preco_tp)
+                return LabelResult(
+                    outcome=LabelOutcome.TP,
+                    preco_saida=preco_tp,
+                    duracao_ms=tick_tp * tick_ms,
+                    retorno_pts=ret,
+                    tp_atingido=True,
+                    sl_atingido=False,
+                    ambiguous=False,
+                )
+            else:
+                ret = (preco_sl - P0) if direction == 1 else (P0 - preco_sl)
+                return LabelResult(
+                    outcome=LabelOutcome.SL,
+                    preco_saida=preco_sl,
+                    duracao_ms=tick_sl * tick_ms,
+                    retorno_pts=ret,
+                    tp_atingido=False,
+                    sl_atingido=True,
+                    ambiguous=False,
+                )
+        elif tick_tp is not None:
             ret = (preco_tp - P0) if direction == 1 else (P0 - preco_tp)
             return LabelResult(
                 outcome=LabelOutcome.TP,
@@ -109,7 +147,7 @@ def label_ponto_ref(precos: np.ndarray, i: int,
                 sl_atingido=False,
                 ambiguous=False,
             )
-        else:
+        elif tick_sl is not None:
             ret = (preco_sl - P0) if direction == 1 else (P0 - preco_sl)
             return LabelResult(
                 outcome=LabelOutcome.SL,
@@ -120,33 +158,122 @@ def label_ponto_ref(precos: np.ndarray, i: int,
                 sl_atingido=True,
                 ambiguous=False,
             )
-    elif tick_tp is not None:
+        else:
+            return LabelResult(
+                outcome=LabelOutcome.TIMEOUT,
+                preco_saida=P0,
+                duracao_ms=max_dt * tick_ms,
+                retorno_pts=0.0,
+                tp_atingido=False,
+                sl_atingido=False,
+                ambiguous=False,
+            )
+
+    # ----------------------------------------------------------
+    # COM ts_ms: horizonte por TIMESTAMP REAL (P0-A33)
+    # ----------------------------------------------------------
+    t0 = int(ts_ms[i])
+    horizonte_ts = t0 + max_holding_ms
+
+    if direction == 1:
+        tp_barrier = P0 + tp_pts
+        sl_barrier = P0 - sl_pts
+    else:
+        tp_barrier = P0 - tp_pts
+        sl_barrier = P0 + sl_pts
+
+    idx_tp = None
+    idx_sl = None
+    preco_tp = P0
+    preco_sl = P0
+    j = i + 1
+    while j < limite and int(ts_ms[j]) <= horizonte_ts:
+        P = float(precos[j])
+        if direction == 1:
+            if idx_tp is None and P >= tp_barrier:
+                idx_tp = j
+                preco_tp = P
+            if idx_sl is None and P <= sl_barrier:
+                idx_sl = j
+                preco_sl = P
+        else:
+            if idx_tp is None and P <= tp_barrier:
+                idx_tp = j
+                preco_tp = P
+            if idx_sl is None and P >= sl_barrier:
+                idx_sl = j
+                preco_sl = P
+        if idx_tp is not None and idx_sl is not None:
+            break
+        j += 1
+
+    def _dur(idx):
+        return max(0, int(ts_ms[idx]) - t0)
+
+    if idx_tp is not None and idx_sl is not None:
+        if idx_tp == idx_sl:
+            return LabelResult(
+                outcome=LabelOutcome.AMBIGUOUS,
+                preco_saida=(preco_tp + preco_sl) / 2.0,
+                duracao_ms=_dur(idx_tp),
+                retorno_pts=0.0,
+                tp_atingido=False,
+                sl_atingido=False,
+                ambiguous=True,
+            )
+        elif idx_tp < idx_sl:
+            ret = (preco_tp - P0) if direction == 1 else (P0 - preco_tp)
+            return LabelResult(
+                outcome=LabelOutcome.TP,
+                preco_saida=preco_tp,
+                duracao_ms=_dur(idx_tp),
+                retorno_pts=ret,
+                tp_atingido=True,
+                sl_atingido=False,
+                ambiguous=False,
+            )
+        else:
+            ret = (preco_sl - P0) if direction == 1 else (P0 - preco_sl)
+            return LabelResult(
+                outcome=LabelOutcome.SL,
+                preco_saida=preco_sl,
+                duracao_ms=_dur(idx_sl),
+                retorno_pts=ret,
+                tp_atingido=False,
+                sl_atingido=True,
+                ambiguous=False,
+            )
+    elif idx_tp is not None:
         ret = (preco_tp - P0) if direction == 1 else (P0 - preco_tp)
         return LabelResult(
             outcome=LabelOutcome.TP,
             preco_saida=preco_tp,
-            duracao_ms=tick_tp * tick_ms,
+            duracao_ms=_dur(idx_tp),
             retorno_pts=ret,
             tp_atingido=True,
             sl_atingido=False,
             ambiguous=False,
         )
-    elif tick_sl is not None:
+    elif idx_sl is not None:
         ret = (preco_sl - P0) if direction == 1 else (P0 - preco_sl)
         return LabelResult(
             outcome=LabelOutcome.SL,
             preco_saida=preco_sl,
-            duracao_ms=tick_sl * tick_ms,
+            duracao_ms=_dur(idx_sl),
             retorno_pts=ret,
             tp_atingido=False,
             sl_atingido=True,
             ambiguous=False,
         )
     else:
+        # TIMEOUT: sem barreira dentro do holding real. Duracao = tempo REAL
+        # ate o ultimo evento dentro da janela (ou 0 sem eventos futuros).
+        ultimo = j - 1
+        dur = _dur(ultimo) if ultimo > i else 0
         return LabelResult(
             outcome=LabelOutcome.TIMEOUT,
             preco_saida=P0,
-            duracao_ms=max_dt * tick_ms,
+            duracao_ms=dur,
             retorno_pts=0.0,
             tp_atingido=False,
             sl_atingido=False,
@@ -192,8 +319,8 @@ def label_array_ref(precos: np.ndarray, ts_ms: np.ndarray, ativos: np.ndarray,
 
         for i in range(seg_ini, seg_fim):
             res = label_ponto_ref(precos, i, tp_pts=tp_pts, sl_pts=sl_pts,
-                                  max_holding_ms=max_holding_ms, tick_ms=tick_ms,
-                                  seg_fim=seg_fim)
+                                  max_holding_ms=max_holding_ms, ts_ms=ts_ms,
+                                  tick_ms=tick_ms, seg_fim=seg_fim)
             outcome_raw[i] = int(res.outcome)
             labels[i] = 0 if res.outcome == LabelOutcome.AMBIGUOUS else int(res.outcome)
             preco_saida[i] = res.preco_saida

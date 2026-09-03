@@ -317,7 +317,26 @@ class SignalEngine:
         if hasattr(self, 'scorer') and self.scorer:
             try:
                 prob_dict = getattr(self.scorer, 'prob', {})
-                if isinstance(prob_dict, dict) and ativo in prob_dict:
+                # P0-A30 (v15.25): o status da ULTIMA inferencia e a fonte
+                # de verdade. O 0.5 guardado em prob[] quando a inferencia
+                # FALHOU e fallback (erro), NAO probabilidade — alimentar a
+                # calibration com esse 0.5 trataria erro como neutro valido
+                # (bloqueando ou liberando trades com base em silencio).
+                _estados = getattr(self.scorer, 'status', None)
+                _estado = 'OK'
+                if isinstance(_estados, dict):
+                    _estado = _estados.get(ativo, 'OK')
+                if _estado == 'MODEL_ERROR':
+                    # ML nao conseguiu inferir: NAO fala. Mesmo tratamento de
+                    # scorer ausente (heuristica pura decide), com motivo
+                    # explicito no signal/jornal.
+                    motivos.append('ML_ERRO (inferencia falhou — heuristica)')
+                elif _estado == 'ECE_ALTO':
+                    # Neutro POLITICO deliberado (calibracao nao confiavel):
+                    # bloqueia direcao, mas nao como erro de modelo.
+                    ml_available = True
+                    motivos.append('ML_BLOCK (ECE alto — neutro politico)')
+                elif isinstance(prob_dict, dict) and ativo in prob_dict:
                     val = prob_dict[ativo]
                     if isinstance(val, (int, float)) and not math.isnan(val):
                         ml_prob = float(val)

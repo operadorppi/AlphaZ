@@ -24,6 +24,32 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 
+def _valor_numerico(v) -> bool:
+    """True se v pode virar float SEM perda de semantica.
+
+    P0-A29 (v15.24): string numerica ('0.5') NAO conta — se uma feature
+    esperada chega como string, e bug do pipeline (sinalizar, nao adivinhar).
+    bool/int/float/Decimal/numpy scalars sao aceitos; None nao.
+    """
+    if v is None:
+        return False
+    if isinstance(v, (bool, int, float)):
+        return True
+    try:
+        from decimal import Decimal
+        if isinstance(v, Decimal):
+            return True
+    except Exception:
+        pass
+    try:
+        import numpy as _np
+        if isinstance(v, _np.generic):
+            return True
+    except Exception:
+        pass
+    return False
+
+
 class FeatureManifest:
     """Manifesto formal das features que o modelo espera.
     
@@ -126,7 +152,10 @@ class FeatureManifest:
         return ok, missing, extra
     
     def extract(self, flat_dict: Dict[str, Any]) -> List[float]:
-        """Extrai valores na ordem exata que o modelo espera.
+        """Extrai valores na ordem exata que o modelo espera (compat).
+        
+        P0-A29 (v15.24): MANTIDO para compat, mas o scorer nao usa mais
+        este caminho — usa montar_vetor(), que nunca fabrica zero fake.
         
         Returns:
             Lista de floats na ordem das features do manifest.
@@ -147,6 +176,47 @@ class FeatureManifest:
             except (TypeError, ValueError):
                 vals.append(0.0)
         return vals
+
+    def montar_vetor(self, flat_dict: Dict[str, Any]):
+        """P0-A29 (v15.24): monta o vetor com CONTRATO EXPLICITO de cobertura.
+
+        Separa tres estados que antes eram confundidos:
+          - feature OBRIGATORIA ausente  -> problema AUSENTE:name
+          - feature presente mas NAO numerica -> problema INVALIDA:name
+          - feature OPCIONAL ausente sem default -> problema SEM_DEFAULT:name
+        (opcional ausente COM default -> usa o default documentado, ok)
+        (presente e zero -> ZERO LEGITIMO, ok)
+
+        Returns:
+            (vals, problemas)
+              vals:      lista de floats na ordem do manifest, ou None se
+                         houver qualquer problema;
+              problemas: lista de strings 'TIPO:name' (vazia se ok).
+        """
+        problemas = []
+        vals = []
+        for feat in self.features:
+            name = feat['nome']
+            if name in flat_dict:
+                v = flat_dict[name]
+                if not _valor_numerico(v):
+                    problemas.append(f'INVALIDA:{name}')
+                    vals.append(None)
+                else:
+                    vals.append(float(v))
+            elif name in self._required:
+                problemas.append(f'AUSENTE:{name}')
+                vals.append(None)
+            else:
+                default = feat.get('default')
+                if default is None:
+                    problemas.append(f'SEM_DEFAULT:{name}')
+                    vals.append(None)
+                else:
+                    vals.append(float(default))
+        if problemas:
+            return None, problemas
+        return vals, []
     
     @property
     def names(self) -> List[str]:
@@ -342,11 +412,20 @@ def _describe(name: str) -> str:
         'volume_acumulado_dia': 'Volume acumulado no dia',
         'volume_por_minuto': 'Volume por minuto',
         'volume_relativo': 'Volume relativo vs histórico',
+        # P1-A26 (v15.21): disponibilidade da baseline p/ distinguir o 1.0
+        # de cold start (sem referencia) do 1.0 real (volume normal).
+        'referencia_disponivel': 'Baseline histórico disponível p/ o minuto (1.0=fallback se False)',
+        'referencia_dias': 'Dias de histórico que sustentam o volume relativo',
         
         # POC migration
-        'poc_delta': 'Delta do POC',
-        'poc_velocity': 'Velocidade do POC',
-        'poc_direction': 'Direção do POC',
+        # P0-A28 (v15.23): poc_delta/velocity/direction medem a migracao no
+        # grid temporal de 100ms (paridade com o diff()/ewm() do batch):
+        #   delta    = pontos de POC na ultima linha de 100ms fechada
+        #   velocity = EWMA(alpha=0.1) das deltas por linha (pts/100ms)
+        #   direction= sinal da delta da linha
+        'poc_delta': 'Delta do POC na ultima linha de 100ms (pts)',
+        'poc_velocity': 'Velocidade do POC — EWMA das deltas por linha de 100ms (pts/100ms)',
+        'poc_direction': 'Direção da migração do POC (sinal da delta da linha)',
         
         # Session time
         'segundos_desde_abertura': 'Segundos desde abertura',

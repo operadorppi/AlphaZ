@@ -39,7 +39,7 @@ from features.volume_profile import VolumeProfileTracker
 from features.poc_migration import PocMigrationTracker
 from features.volume_relativo import VolumeRelativoTracker
 from features.cross_asset import CrossAssetEngine
-from ml.feature_manifest import FeatureManifest
+from ml.feature_manifest import FeatureManifest, _valor_numerico
 
 log = logging.getLogger('scorer')
 
@@ -236,11 +236,22 @@ class ScorerML:
         
         self.ultimo_snap = {}
         self.prob = {}
+        # P0-A30 (v15.25): status da ULTIMA inferencia por ativo. O 0.5 de
+        # fallback (erro/cobertura) NAO pode ser tratado como probabilidade
+        # valida por quem consome — o status e a fonte de verdade:
+        #   'OK'            -> inferencia valida
+        #   'NAO_INFERIDO'  -> ainda nao houve snap p/ o ativo
+        #   'MODEL_ERROR'   -> inferencia falhou — prob() NAO vale (None)
+        #   'ECE_ALTO'      -> inferiu mas ECE > 0.15 — neutro POLITICO
+        self.status = {a: 'NAO_INFERIDO' for a in instrumentos}
         # v9.19: observabilidade
         self.fallos = 0
         self.ultimo_fallo_ts = None
         self.ultimo_ok_ts = None
         self.ultimo_error = None
+        # P0-A29 (v15.24): assinatura do ultimo problema de cobertura, p/
+        # throttling do log (feature sistematicamente ausente nao inunda log)
+        self._ultimo_erro_cobertura = None
         self._ece = 0.0  # v12.2: ECE tracking para fallback
 
         # v9.33: indice da classe 1 (TP) no predict_proba
@@ -276,6 +287,9 @@ class ScorerML:
         self._inter_ativos = {instrumentos[0]}
         if len(instrumentos) > 1:
             self._inter_ativos.add(instrumentos[1])
+        # v15.20: último imb_L1 de book por ativo (ts_ms, imb) para alimentar
+        # corr_imb_book real no cross-asset (antes: 0.0 por construção).
+        self._inter_book_imb = {}
 
         # Estado para detecção de aproximação/afastamento
         self._prev_dist_vwap = {}
@@ -325,12 +339,18 @@ class ScorerML:
         self._ultimo_dia[ativo] = dia
         
         # v12.2: Reset diário de todos os trackers
-        if ativo in self.vps:
-            self.vps[ativo].reset_diario()
-        if ativo in self.mig:
-            self.mig[ativo].reset_diario()
-        if ativo in self.vrels:
-            self.vrels[ativo].reset_diario()
+        # P0-A27 (v15.22): vps NAO e resetado aqui — o VolumeProfileTracker faz
+        # rollover interno por dia BRT no atualizar(ts_ms, ...). Reset externo
+        # aqui rodava DEPOIS do 1o update do dia novo e apagava o 1o trade
+        # (que ja tinha entrado no perfil da sessao nova).
+        # P0-A28 (v15.23): mig NAO e resetado aqui — o PocMigrationTracker faz
+        # rollover interno por dia BRT no update(ts_ms, ...) pelo mesmo motivo
+        # (reset externo pos-update contaminava/perdia a 1a linha do dia novo).
+        # P1-A26 (v15.21): vrels NAO e resetado aqui. O VolumeRelativoTracker
+        # faz o proprio rollover no update() (arquiva o dia anterior em
+        # _historico e zera o dia corrente). Reset externo aqui apagava o
+        # historico recem-arquivado — em live a referencia entre dias nunca
+        # acumulava e volume_relativo ficava preso no fallback 1.0.
         if ativo in self.vol:
             self.vol[ativo].reset_diario()
         if ativo in self.ret:
@@ -370,19 +390,28 @@ class ScorerML:
             self.vwaps[ativo].update(ts_ms, preco, qtd)
         
         # v10.2: Atualizar Volume Profile e Migração POC
+        # P0-A27 (v15.22): ts_ms obrigatorio — rollover de sessao interno.
         if ativo in self.vps:
-            self.vps[ativo].atualizar(preco, qtd, agressor)
+            self.vps[ativo].atualizar(ts_ms, preco, qtd, agressor)
             vp_snap = self.vps[ativo].calcular(preco)
             # POC Migration (causal: usa o POC calculado até t)
+            # P0-A28 (v15.23): ts_ms agora e passado — a velocidade do POC é
+            # calculada no grid temporal de 100ms (delta/linha + EWMA), não
+            # como delta entre atualizações consecutivas.
             poc_t = preco + vp_snap['poc_dist'] # poc = preco + (poc-preco)
-            self.mig[ativo].update(preco, poc_t)
+            self.mig[ativo].update(ts_ms, preco, poc_t)
             
         # v10.2: Volume Relativo e Intermarket
         if ativo in self.vrels:
             self.vrels[ativo].update(qtd, ts_ms)
         if ativo in self._inter_ativos:
+            # v15.20: imb_book = imb_L1 do ÚLTIMO book processado antes deste
+            # trade no fluxo (streaming as-of — mesma convenção do _ultimo_book
+            # do gerador). Sem book ainda → 0.0.
+            _ib = self._inter_book_imb.get(ativo)
             self.inter.registrar(ativo, ts_ms, preco,
-                                 (1.0 if agressor == 'Comprador' else -1.0))
+                                 (1.0 if agressor == 'Comprador' else -1.0),
+                                 imb_book=(_ib[1] if _ib else 0.0))
 
         if ativo in self.ctx:
             self.ctx[ativo].update(ts_ms, preco, qtd)
@@ -417,6 +446,14 @@ class ScorerML:
 
     def book(self, ativo, ts_ms, snap):
         """Recebe contrato BookSnapshot e converte para o formato interno do GeradorJanelas."""
+        # v15.20: imb L1 do snapshot p/ cross-asset (corr_imb_book real)
+        imb = 0.0
+        if getattr(snap, 'bids', None) and getattr(snap, 'asks', None):
+            bv = float(snap.bids[0].volume)
+            av = float(snap.asks[0].volume)
+            if bv + av > 0:
+                imb = (bv - av) / (bv + av)
+        self._inter_book_imb[ativo] = (ts_ms, imb)
         # Transforma o objeto BookSnapshot do contrato em dict legível pelos trackers de features
         snap_dict = {
             'bid_preco': [l.price for l in snap.bids],
@@ -455,8 +492,23 @@ class ScorerML:
         preco = snap.get('preco_ultimo', 0.0)
 
         # 2. Volume Profile e Derivações POC
+        # P0-A31 (v15.27): fonte do VP para o ROW do modelo = o vp embutido
+        # no snap do GeradorJanelas (self.gerador.vp_trackers) — MESMA
+        # semantica do dataset_100ms de treino (corte emitido ANTES do trade
+        # que cruza a borda: lag de 1 trade). ANTES o row era sobrescrito com
+        # self.vps[ativo].calcular(preco) em instante de trade (sem o lag) —
+        # duas implementacoes paralelas de VP dentro do scorer divergindo do
+        # dataset em ~1 trade (A31). O fallback p/ self.vps so cobre snaps
+        # sem vp (chamadas diretas/warm-up de testes).
         if ativo in self.vps:
-            vp = self.vps[ativo].calcular(preco)
+            _vp_snap = {k: row.get(f'vp_{k}') for k in
+                        ('poc_dist', 'vah_dist', 'val_dist', 'vp_total',
+                         'poc_acima')}
+            if _vp_snap['poc_dist'] is not None:
+                vp = {k: float(v) if v is not None else 0.0
+                      for k, v in _vp_snap.items()}
+            else:
+                vp = self.vps[ativo].calcular(preco)
             row.update(vp)
             # dist_preco_poc_ticks
             tick = self.vps[ativo].tick
@@ -598,19 +650,48 @@ class ScorerML:
         if ativo in self.regime and 'regime_realiz_vol' not in row:
             row.update(self.regime[ativo].snapshot())
 
-        # v11.11: Extração via FeatureManifest (fail-safe)
+        # v11.11 + P0-A29 (v15.24): extracao com CONTRATO de cobertura.
+        # Ausente != invalida != zero legitimo:
+        #   - feature obrigatoria ausente          -> fail-safe (0.5 neutro)
+        #   - feature presente mas nao numerica    -> fail-safe (idem)
+        #   - feature opcional ausente com default -> default documentado
+        #   - zero legitimo (presente)             -> zero
+        # Nunca fabricar 0.0 para feature ausente (informacao falsa p/ o
+        # modelo). Motivo registrado em self.ultimo_error, distingui
+        # AUSENTE/INVALIDA/SEM_DEFAULT, e o log e throttled por assinatura.
+        problemas = None
         if self.manifest:
-            ok, missing, extra = self.manifest.validate(row)
-            if not ok:
-                self.fallos += 1
-                self.ultimo_fallo_ts = time.time()
-                self.ultimo_error = f'MISSING_FEATURES: {missing}'
-                log.error('[MANIFEST] Features faltando: %s (fallos=%d)', missing, self.fallos)
-                return 0.5  # fail-safe: neutro
-            vals = self.manifest.extract(row)
+            _vals, problemas = self.manifest.montar_vetor(row)
+            if not problemas:
+                vals = _vals
         else:
-            # Fallback: usa lista do .pkl (sem validação)
-            vals = [float(row.get(c, 0.0)) for c in self.features]
+            # Fallback sem manifest: TODA feature da lista do .pkl e
+            # obrigatoria (mesma semantica do required=True padrao do
+            # manifest). ANTES: row.get(c, 0.0) zerava ausente em silencio.
+            ausentes = [c for c in self.features if c not in row]
+            invalidas = [c for c in self.features if c in row
+                         and not _valor_numerico(row[c])]
+            if ausentes or invalidas:
+                problemas = ([f'AUSENTE:{c}' for c in ausentes]
+                             + [f'INVALIDA:{c}' for c in invalidas])
+            else:
+                vals = [float(row[c]) for c in self.features]
+        if problemas:
+            motivo = ';'.join(problemas[:10])
+            self.fallos += 1
+            self.ultimo_fallo_ts = time.time()
+            self.ultimo_error = f'COBERTURA: {motivo}'
+            # throttling: loga na 1a ocorrencia da assinatura e a cada 200
+            if motivo != self._ultimo_erro_cobertura:
+                log.error('[MANIFEST] Cobertura incompleta: %s (fallos=%d) — '
+                          'sinal neutro (0.5), sem zero fake', motivo, self.fallos)
+                self._ultimo_erro_cobertura = motivo
+            elif self.fallos % 200 == 0:
+                log.error('[MANIFEST] Cobertura incompleta (repetida %dx): %s',
+                          self.fallos, motivo)
+            # P0-A30: sinaliza MODEL_ERROR — quem consome decide explicitamente
+            self.status[ativo] = 'MODEL_ERROR'
+            return 0.5  # fail-safe: neutro (prob NAO confiavel)
 
         try:
             import warnings as _w
@@ -622,18 +703,49 @@ class ScorerML:
             self.ultimo_fallo_ts = time.time()
             self.ultimo_error = repr(exc)
             log.error('[scorer] predict falhou: %r (fallos=%d)', exc, self.fallos)
+            # P0-A30: sinaliza MODEL_ERROR — prob NAO confiavel
+            self.status[ativo] = 'MODEL_ERROR'
             return 0.5
         
         # v12.2: ECE fallback — se ECE alto, retorna probabilidade neutra
         if hasattr(self, '_ece') and self._ece > 0.15:
             log.warning('[ML] ECE alto (%.4f), usando fallback neutro', self._ece)
+            # P0-A30: status proprio (neutro POLITICO, nao erro de modelo)
+            self.status[ativo] = 'ECE_ALTO'
             return 0.5
         
+        self.status[ativo] = 'OK'
+        # P0-A30 (v15.25): registra a prob valida aqui tambem (invariante
+        # prob/status consistente para qualquer chamador; _consumir apenas
+        # reatribui o mesmo valor no caminho de evento).
+        self.prob[ativo] = float(p)
         self.ultimo_ok_ts = time.time()
         return p
 
+    def obter_estado(self, ativo):
+        """P0-A30 (v15.25): (probabilidade | None, status).
+
+        Fonte de verdade para quem consome o ML:
+          - status 'MODEL_ERROR' -> prob = None (a inferencia FALHOU; o 0.5
+            guardado em prob[] e de fallback e NAO pode ser tratado como
+            probabilidade valida);
+          - demais status -> prob numerica (0.5 pode ser neutro legitimo
+            quando 'OK', ou neutro POLITICO quando 'ECE_ALTO').
+        """
+        st = self.status.get(ativo, 'NAO_INFERIDO')
+        if st == 'MODEL_ERROR':
+            return None, st
+        p = self.prob.get(ativo)
+        if p is None or not isinstance(p, (int, float)) or math.isnan(p):
+            return 0.5, st
+        return float(p), st
+
     def get_raw_signal(self, ativo):
-        """Retorna apenas a probabilidade bruta para o RiskManager."""
+        """Retorna apenas a probabilidade bruta para o RiskManager (legacy).
+
+        P0-A30: NAO distingue erro de neutro legitimo — prefira
+        obter_estado(ativo) que retorna None quando a inferencia falhou.
+        """
         p = self.prob.get(ativo, 0.5)
         return p
 
@@ -666,6 +778,9 @@ class ScorerML:
         return {
             'ativos': list(self.prob.keys()),
             'prob': dict(self.prob),
+            # P0-A30 (v15.25): status por ativo para monitoramento — 0.5 de
+            # fallback (MODEL_ERROR) nao e probabilidade valida
+            'status': dict(self.status),
             'fallos': self.fallos,
             'ultimo_fallo_ts': self.ultimo_fallo_ts,
             'ultimo_ok_ts': self.ultimo_ok_ts,

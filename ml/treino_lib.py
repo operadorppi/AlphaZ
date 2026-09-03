@@ -31,7 +31,8 @@ def flatten_snapshot(snap):
     return flat
 
 
-def split_com_purge(df, train_pct=0.8, purge_s=5, embargo_s=30, ts_col='ts_ms'):
+def split_com_purge(df, train_pct=0.8, purge_s=5, embargo_s=30, ts_col='ts_ms',
+                    retornar_politica=False, exigir_integral=False):
     """Split temporal com purge + embargo (sem leakage).
     
     - purge_s: remove linhas do FINAL do treino que estão a menos de
@@ -40,15 +41,31 @@ def split_com_purge(df, train_pct=0.8, purge_s=5, embargo_s=30, ts_col='ts_ms'):
     
     Baseado em: de Prado, Advances in Financial Machine Learning, Cap. 7
     
+    P1-A32 (v15.29): embargo SOLICITADO != embargo REALIZADO nunca e
+    adaptacao silenciosa. Quando os dados apos o corte nao comportam o
+    embargo integral:
+      - default (retornar_politica=False): mantem o fallback operacional
+        (gap minimo de purge) mas LOGANDO claramente o estado
+        INCONCLUSIVO — o retorno NUNCA deve ser reportado como
+        "embargo integral/sem leakage" nesse caso;
+      - retornar_politica=True: retorna tambem um dict com a politica
+        realizada (embargo_solicitado/realizado, status OK ou
+        EMBARGO_REDUZIDO) para o chamador rotular a validacao;
+      - exigir_integral=True: NAO adapta — levanta ValueError
+        (VALIDACAO INCONCLUSIVA) se o embargo solicitado nao couber.
+
     Args:
         df: DataFrame ordenado por tempo
         train_pct: fração do treino (default 0.8)
         purge_s: segundos de purge entre treino e teste
         embargo_s: segundos de embargo após o purge
         ts_col: coluna de timestamp em milissegundos
+        retornar_politica: se True, retorna (train, test, politica)
+        exigir_integral: se True, falha quando o embargo nao cabe
     
     Returns:
-        (df_train, df_test) sem leakage
+        (df_train, df_test) sem leakage — ou (df_train, df_test, politica)
+        quando retornar_politica=True
     """
     n = len(df)
     split_idx = int(n * train_pct)
@@ -76,32 +93,49 @@ def split_com_purge(df, train_pct=0.8, purge_s=5, embargo_s=30, ts_col='ts_ms'):
     # barreira temporal real de (purge_s + embargo_s) entre treino e teste.
     ts_test_start = ts_corte + embargo_ms
 
-    # Robustez: se os dados após o corte não comportam o embargo integral
-    # (ex.: janela curta de teste), reduzimos o início do teste até pelo
-    # menos o gap de purge (preservando a barreira temporal mínima) e
-    # LOGAMOS claramente para o operador. Só falhamos de verdade se nem
-    # mesmo o gap reduzido deixar linhas de teste (protegendo contra teste
-    # vazio → passagem vacua que enganaria a avaliação).
+    # P1-A32 (v15.29): embargo SOLICITADO != embargo REALIZADO. Se os dados
+    # após o corte não comportam o embargo integral, NUNCA adaptar em
+    # silencio:
+    #   - exigir_integral=True -> VALIDACAO INCONCLUSIVA (falha explicita)
+    #   - senao -> fallback operacional (gap minimo de purge) logado e com a
+    #     politica realizada exposta via retornar_politica, para o chamador
+    #     rotular o resultado (nunca "embargo integral aplicado").
     import logging as _logging
     _log_warn = _logging.getLogger(__name__).warning
     max_ts = df[ts_col].max()
+    embargo_realizado_s = float(embargo_s)
     if ts_test_start > max_ts:
-        ts_test_start = min(max_ts, ts_corte + purge_ms)
-        _log_warn(
-            "split_com_purge: embargo (%ss) maior que os dados apos o corte — "
-            "teste inicia em %s (gap reduzido p/ evitar teste vazio); confira "
-            "se o conjunto de teste NAO ficou pequeno demais para ser conclusivo",
-            embargo_s, ts_test_start)
-        if ts_test_start > max_ts:
+        if exigir_integral:
             raise ValueError(
-                f"split_com_purge: ate o gap de purge ({purge_s}s) nao deixa "
-                f"linhas de teste (max_ts={max_ts}, ts_test_start={ts_test_start}). "
-                f"Reduza parameters ou use mais dados."
-            )
+                "split_com_purge: VALIDACAO INCONCLUSIVA — embargo solicitado "
+                f"({embargo_s}s) NAO cabe apos o corte (dados terminam em "
+                f"{max_ts}, teste precisaria comecar em {ts_test_start}). Exija "
+                "mais dados ou reduza o embargo EXPLICITAMENTE.")
+        ts_test_start = min(max_ts, ts_corte + purge_ms)
+        embargo_realizado_s = max(0.0, (ts_test_start - ts_corte) / 1000.0)
+        _log_warn(
+            "split_com_purge: VALIDACAO INCONCLUSIVA — embargo solicitado "
+            "(%ss) > dados apos o corte; embargo REALIZADO=%ss (gap minimo de "
+            "purge). Nao reporte este split como 'embargo integral/sem leakage'. "
+            "Use exigir_integral=True para falhar explicitamente.",
+            embargo_s, embargo_realizado_s)
 
     df_train = df[df[ts_col] < ts_purge_start]
     df_test = df[df[ts_col] >= ts_test_start]
-    
+
+    if retornar_politica:
+        _integral = bool(embargo_realizado_s >= embargo_s - 1e-9)
+        politica = {
+            'purge_solicitado_s': purge_s,
+            'embargo_solicitado_s': embargo_s,
+            'embargo_realizado_s': round(float(embargo_realizado_s), 3),
+            'embargo_integral': _integral,
+            'status': ('OK' if _integral else 'EMBARGO_REDUZIDO'),
+            'ts_corte': int(ts_corte),
+            'ts_test_start_real': int(ts_test_start),
+        }
+        return df_train, df_test, politica
+
     return df_train, df_test
 
 

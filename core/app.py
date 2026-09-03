@@ -72,6 +72,55 @@ from adapters.dashboard_server import DashboardServer
 ERROS_GLOBAIS = defaultdict(int)
 
 
+# ============================================================
+# P0-A30 aprofundado (v15.26): helpers puros de propagacao do status do ML
+# ============================================================
+
+
+def _ml_operacional(scorer, ativo):
+    """ML 'up' para o RiskEngine = scorer carregado E a ultima inferencia do
+    ativo foi OK. MODEL_ERROR/NAO_INFERIDO/ECE_ALTO -> o ML NAO fornece
+    probabilidade direcional valida (down para risco) — o 0.5 de fallback
+    nunca e tratado como disponibilidade. ANTES: `scorer is not None`.
+    """
+    if not scorer:
+        return False
+    st = getattr(scorer, 'status', None)
+    if not isinstance(st, dict):
+        return True  # scorer sem status (compat): assume operacional
+    return st.get(ativo, 'NAO_INFERIDO') == 'OK'
+
+
+def _status_do_ml(scorer, ativo):
+    """Status textual da ultima inferencia do ativo (p/ auditoria/risco)."""
+    if not scorer:
+        return None
+    st = getattr(scorer, 'status', None)
+    if not isinstance(st, dict):
+        return 'OK'
+    return st.get(ativo, 'NAO_INFERIDO')
+
+
+def _classificar_modelo(scorer, sig):
+    """Classificacao do modelo usado num Signal p/ o journal.
+
+    Ordem de precedencia:
+      1. sem scorer                 -> 'heuristico'
+      2. ML_ERRO no sinal           -> 'heuristico+ML(ERRO)' (inferencia falhou;
+         o motor rodou em heuristica pura — NUNCA rotular como ML usado/bloqueado)
+      3. ml_prob valido e direcao   -> 'heuristico+ML(USADO)'
+      4. resto                       -> 'heuristico+ML(BLOQUEADO)'
+    """
+    if not scorer:
+        return 'heuristico'
+    motivos = getattr(sig, 'motivos', None) or []
+    if any('ML_ERRO' in m for m in motivos):
+        return 'heuristico+ML(ERRO)'
+    if getattr(sig, 'ml_prob', 0.0) > 0.5 and getattr(sig, 'lado', '') != '':
+        return 'heuristico+ML(USADO)'
+    return 'heuristico+ML(BLOQUEADO)'
+
+
 class App:
     """Orquestrador principal com loop RTD completo."""
 
@@ -446,7 +495,12 @@ class App:
                     preco_ts=trade.timestamp_ms,
                     spread=blf.get('spread', 0),
                     vol_bps=blf.get('vel_bid_ewma', 0),
-                    ml_disponivel=self.scorer is not None,
+                    # P0-A30 (v15.26): disponibilidade = status OK da ultima
+                    # inferencia do ativo (MODEL_ERROR/ECE_ALTO/NAO_INFERIDO
+                    # => ML down p/ risco, com status e ativo no motivo)
+                    ml_disponivel=_ml_operacional(self.scorer, trade.symbol),
+                    ml_status=_status_do_ml(self.scorer, trade.symbol),
+                    ml_ativo=trade.symbol,
                     confianca=sig.confianca,
                 )
 
@@ -477,11 +531,7 @@ class App:
                         risk_decision=decision.decisao if hasattr(decision, 'decisao') else '',
                         risk_motivo=decision.motivo if hasattr(decision, 'motivo') else '',
                         motivos=sig.motivos,
-                        modelo=(
-                            'heuristico' if not self.scorer
-                            else ('heuristico+ML(USADO)' if sig.ml_prob > 0.5 and sig.lado != ''
-                                  else 'heuristico+ML(BLOQUEADO)')
-                        ),
+                        modelo=_classificar_modelo(self.scorer, sig),
                         model_version=self.config.get('ml_modelo', '').split('\\')[-1] if self.config.get('ml_modelo') else '',
                     )
                     self.journal.registrar(entry)
@@ -527,7 +577,12 @@ class App:
                     preco_ts=trade.timestamp_ms,
                     spread=blf.get('spread', 0),
                     vol_bps=blf.get('vel_bid_ewma', 0),
-                    ml_disponivel=self.scorer is not None,
+                    # P0-A30 (v15.26): disponibilidade = status OK da ultima
+                    # inferencia do ativo (MODEL_ERROR/ECE_ALTO/NAO_INFERIDO
+                    # => ML down p/ risco, com status e ativo no motivo)
+                    ml_disponivel=_ml_operacional(self.scorer, trade.symbol),
+                    ml_status=_status_do_ml(self.scorer, trade.symbol),
+                    ml_ativo=trade.symbol,
                     confianca=sig.confianca,
                 )
                 
@@ -564,11 +619,7 @@ class App:
                         # v12.3: CORREÇÃO — Registrar se o ML foi usado (gate passou)
                         # ou apenas consultado (gate bloqueou). Isso ajuda na análise
                         # posterior de performance do ML vs heurística.
-                        modelo=(
-                            'heuristico' if not self.scorer
-                            else ('heuristico+ML(USADO)' if sig.ml_prob > 0.5 and sig.lado != ''
-                                  else 'heuristico+ML(BLOQUEADO)')
-                        ),
+                        modelo=_classificar_modelo(self.scorer, sig),
                         model_version=self.config.get('ml_modelo', '').split('\\')[-1] if self.config.get('ml_modelo') else '',
                     )
                     self.journal.registrar(entry)

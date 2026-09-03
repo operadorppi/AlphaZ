@@ -244,7 +244,10 @@ class GeradorJanelas:
 
         self.janelas[ativo].add_evento(ts_ms, preco, qtd, agressor, comp, vend)
         if ativo in self.vp_trackers:
-            self.vp_trackers[ativo].atualizar(preco, qtd, agressor)
+            # P0-A27 (v15.22): ts_ms obrigatorio — rollover de sessao interno
+            # do VolumeProfileTracker (além do reset externo por dia local
+            # acima, defesa em profundidade para a fonte BRT).
+            self.vp_trackers[ativo].atualizar(ts_ms, preco, qtd, agressor)
         if ativo in self.kyle_trackers:
             self.kyle_trackers[ativo].atualizar(preco, qtd, agressor)
         self._ultimo_preco[ativo] = preco

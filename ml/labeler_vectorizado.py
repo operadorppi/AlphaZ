@@ -8,8 +8,9 @@ v9.14 — REESCRITO com semantica canônica:
   - NUNCA cruza fronteira de dia/ativo
   - Embargo so rearma em trade real
 
-Implementacao por segmento com scan forward O(N * max_holding_ticks).
-Para holding=30s e grid=100ms, max_holding_ticks=300 — efetivamente O(N).
+Implementacao por segmento com scan forward sobre a janela REAL de eventos
+(timestamp): holding de 30s = eventos com ts <= t + 30s. P0-A33 (v15.30):
+NUNCA converte holding em contagem de linhas (dados RAW sao irregulares).
 
 Uso:
   python labeler_vectorizado.py --input dataset.jsonl --tp 100 --sl 50 --max-holding 30
@@ -57,6 +58,12 @@ def label_vectorizado(precos, ts_ms, ativos,
       ambos no tick -> label = AMBIGUOUS (-99)
       nenhum        -> label = TIMEOUT (0)
 
+    P0-A33 (v15.30): o horizonte de holding e TEMPO REAL — ts[i] +
+    max_holding_s — e a duracao_ms de cada label e o delta REAL de
+    timestamps (nao "linhas * tick_ms"). Em grid uniforme de 100ms o
+    resultado e identico ao comportamento anterior; em dados irregulares
+    (RAW de eventos), N linhas NAO equivalem a N*100ms.
+
     Returns:
         dict com arrays numpy
     """
@@ -68,8 +75,11 @@ def label_vectorizado(precos, ts_ms, ativos,
         max_holding_s = 30
     n = len(precos)
     max_holding_ms = max_holding_s * 1000
-    ahead_ticks = max_holding_ms // tick_ms
     purge_ms = purge_s * 1000
+    # P0-A33 (v15.30): horizonte por TIMESTAMP REAL (ts[i] + max_holding_ms),
+    # nunca "max_holding_ms // tick_ms linhas" — os dados RAW de eventos sao
+    # irregulares (rajadas com linhas a 1ms, silencios a 800ms) e N linhas nao
+    # equivalem a N*100ms. tick_ms fica como parametro de compat, NAO usado.
 
     # Arrays de saida
     labels = np.full(n, TIMEOUT_VALUE, dtype=np.int32)
@@ -96,60 +106,59 @@ def label_vectorizado(precos, ts_ms, ativos,
             tp_barrier = P0 + tp_pts
             sl_barrier = P0 - sl_pts
 
-            # Limite do scan: holding ou fim do segmento
-            ticks_ate_fim = seg_fim - i - 1
-            max_dt = min(ahead_ticks, ticks_ate_fim)
+            # Janela real: todos os eventos com ts <= ts[i] + holding
+            # (respeitando o fim do segmento). FIRST BARRIER WINS.
+            horizonte_ts = ts_ms[i] + max_holding_ms
 
-            if max_dt <= 0:
-                # Sem espaco para scan — TIMEOUT
-                duracao_ms[i] = 0
-                continue
-
-            # Scan forward: primeiro toque
+            # Scan forward: primeiro toque (indice absoluto p/ ts real)
             tick_tp = None
             tick_sl = None
             preco_tp = P0
             preco_sl = P0
-
-            for dt in range(1, max_dt + 1):
-                P = precos[i + dt]
+            j = i + 1
+            while j < seg_fim and ts_ms[j] <= horizonte_ts:
+                P = precos[j]
 
                 if tick_tp is None and P >= tp_barrier:
-                    tick_tp = dt
+                    tick_tp = j
                     preco_tp = P
 
                 if tick_sl is None and P <= sl_barrier:
-                    tick_sl = dt
+                    tick_sl = j
                     preco_sl = P
 
                 if tick_tp is not None and tick_sl is not None:
                     break
+                j += 1
+
+            def _dur(idx):
+                return max(0, int(ts_ms[idx]) - int(ts_ms[i]))
 
             # ══════════════════════════════════════════════
             # DECISAO — FIRST BARRIER WINS
             # ══════════════════════════════════════════════
             if tick_tp is not None and tick_sl is not None:
                 if tick_tp == tick_sl:
-                    # AMBIGUOUS: mesmo tick
+                    # AMBIGUOUS: mesmo evento
                     ambiguous[i] = True
                     outcome_raw[i] = AMBIGUOUS_VALUE
                     labels[i] = 0
                     preco_saida[i] = (preco_tp + preco_sl) / 2.0
-                    duracao_ms[i] = tick_tp * tick_ms
+                    duracao_ms[i] = _dur(tick_tp)
                 elif tick_tp < tick_sl:
                     # TP veio primeiro
                     labels[i] = TP_VALUE
                     outcome_raw[i] = TP_VALUE
                     tp_atingido[i] = True
                     preco_saida[i] = preco_tp
-                    duracao_ms[i] = tick_tp * tick_ms
+                    duracao_ms[i] = _dur(tick_tp)
                 else:
                     # SL veio primeiro
                     labels[i] = SL_VALUE
                     outcome_raw[i] = SL_VALUE
                     sl_atingido[i] = True
                     preco_saida[i] = preco_sl
-                    duracao_ms[i] = tick_sl * tick_ms
+                    duracao_ms[i] = _dur(tick_sl)
 
             elif tick_tp is not None:
                 # So TP
@@ -157,7 +166,7 @@ def label_vectorizado(precos, ts_ms, ativos,
                 outcome_raw[i] = TP_VALUE
                 tp_atingido[i] = True
                 preco_saida[i] = preco_tp
-                duracao_ms[i] = tick_tp * tick_ms
+                duracao_ms[i] = _dur(tick_tp)
 
             elif tick_sl is not None:
                 # So SL
@@ -165,12 +174,14 @@ def label_vectorizado(precos, ts_ms, ativos,
                 outcome_raw[i] = SL_VALUE
                 sl_atingido[i] = True
                 preco_saida[i] = preco_sl
-                duracao_ms[i] = tick_sl * tick_ms
+                duracao_ms[i] = _dur(tick_sl)
 
             else:
-                # TIMEOUT
+                # TIMEOUT: sem barreira dentro do holding REAL. Duracao =
+                # tempo real ate o ultimo evento da janela (ou 0 sem eventos).
                 outcome_raw[i] = TIMEOUT_VALUE
-                duracao_ms[i] = max_dt * tick_ms
+                ultimo = j - 1
+                duracao_ms[i] = _dur(ultimo) if ultimo > i else 0
                 preco_saida[i] = P0
 
     # v9.30: Volume minimo — mascara de validade (nao zera labels)

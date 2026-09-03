@@ -287,6 +287,27 @@ def main():
             'leakage_removido': ['preco_saida', 'duracao_label_ms'],
         }, f)
     print(f'\nNovo modelo salvo: {args.modelo_out}')
+
+    # ============================================================
+    # FEATURE MANIFEST (P0-A29 / v15.24)
+    # ============================================================
+    # Salva feature_manifest.json AO LADO do .pkl — o scorer ao vivo usa o
+    # manifest como contrato de cobertura (required/optional/default). Sem
+    # ele, o fallback trata TODA feature do .pkl como obrigatoria (sinal
+    # neutro se faltar qualquer uma — nunca zero fake).
+    try:
+        from ml.feature_manifest import FeatureManifest
+        _mani = FeatureManifest.from_model(
+            new_model, X_cols,
+            model_name=os.path.basename(args.modelo_out),
+            model_version='limpo',
+            train_date=datetime.now().strftime('%Y-%m-%d'))
+        _mani_path = os.path.join(os.path.dirname(args.modelo_out),
+                                  'feature_manifest.json')
+        _mani.save(_mani_path)
+        print(f'Feature manifest salvo: {_mani_path}')
+    except Exception as _e:
+        print(f'[AVISO] Falha ao salvar feature_manifest.json: {_e}')
     
     # ============================================================
     # MODEL REGISTRY (Fase 9)

@@ -222,3 +222,37 @@ perdida e a semântica ficava implícita/não documentada.
 (de "último por segundo" para "média por bucket de 100ms"). Essas features são
 live-only (o batch não as calcula) e não há modelo treinado em produção —
 retreino já pendente. Validado por `testes/test_cross_asset_agregacao_v1519.py`.
+
+---
+
+## P0-A28 (v15.23) — PocMigrationTracker: velocidade no grid temporal
+
+**Achado:** `PocMigrationTracker.update(preco, poc)` não recebia timestamp e
+`snapshot()` fazia `velocity = delta` — a "velocidade" media o **tamanho do
+pulo** do POC entre duas atualizações consecutivas, não a velocidade: um POC
+que andava 5 pontos em 10ms ou em 5s produzia `poc_velocity = 5.0` nos dois
+casos, e o valor ficava congelado até a próxima mudança de POC.
+
+**Correção (mesmo contrato temporal das fases A20/A21/A25):**
+
+| Feature | Nova semântica (grid do master clock de 100ms) |
+|---|---|
+| `poc_delta` | Delta de POC da **última linha de 100ms fechada** (paridade: `diff()` do batch no dataset forward-filled) |
+| `poc_velocity` | EWMA causal `alpha=0.1` das **deltas por linha** (paridade: `diff().ewm(alpha=0.1).mean()` do batch) — unidade: pts de POC por linha de 100ms |
+| `poc_direction` | Sinal da delta da linha fechada (paridade: `np.sign(diff)` do batch) |
+
+- Cada trade amostra `(ts_ms, preco, poc_ate_t)` com POC causal até `t`; o
+  corte de 100ms fecha com o POC do último trade com ts **estritamente menor**
+  que o corte; cortes intermediários sem trade são fechados forward-filled
+  (POC constante → delta 0 → EWMA decai) — idêntico ao batch.
+- **Rollover interno por dia de Brasília** no `update(ts_ms, ...)` (padrão
+  P0-A27): o estado do dia anterior é descartado antes do 1º evento do dia
+  novo; o reset externo no scorer foi removido (rodava depois do update e
+  contaminava/perdia a 1ª linha da sessão).
+- Implementado em `features/poc_migration.py` (docstring do módulo) e
+  refletido em `ml/feature_manifest.py`.
+
+**Regressão de valores:** `poc_velocity` muda de "delta por update" para
+"EWMA por linha de 100ms" — valores só comparáveis após retreino (já
+pendente; nenhum modelo em produção). Validado por
+`testes/test_poc_migration_temporal_v1523.py`.

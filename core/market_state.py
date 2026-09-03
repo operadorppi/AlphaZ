@@ -353,9 +353,18 @@ class MarketState:
         st['p1'] = preco
 
         # Cross-asset (v11.0: CrossAssetManager)
+        # v15.20: imb_book REAL — imb_L1 do último book processado ANTES deste
+        # trade no fluxo (streaming as-of; book_stats é substituído por uma
+        # referência nova a cada snapshot — leitura lock-free segura sob GIL).
+        # Antes todos os chamadores passavam imb_book=0.0 → corr_imb_book era
+        # 0 por construção. Semântica de profundidade ordenada (v15.9).
+        _bs = self.book_stats.get(ativo) or {}
+        _bl = _bs.get('book_level') or {}
+        _imb_book = float(_bl.get('imb_L1', _bs.get('imb', 0.0)) or 0.0)
         self.cross_manager.registrar(
             ativo, tms, preco,
-            1.0 if agr == 'Comprador' else (-1.0 if agr == 'Vendedor' else 0.0))
+            1.0 if agr == 'Comprador' else (-1.0 if agr == 'Vendedor' else 0.0),
+            imb_book=_imb_book)
 
         # Agressão por corretora (comprado/vendido = fluxo completo)
         if comp and comp not in ('None', ''):

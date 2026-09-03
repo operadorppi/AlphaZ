@@ -147,6 +147,10 @@ class RiskEngine:
         self._vol_bps = 0.0
         self._ml_disponivel = False
         self._ml_ultimo_update = 0.0
+        # P0-A30 (v15.26): status/ativo da ultima inferencia (auditoria — o
+        # motivo de ML down distingue MODEL_ERROR de simples indisponibilidade)
+        self._ml_status = None
+        self._ml_ativo = None
         self._confianca_ewma = 0.0
         
         # Historico para auditoria
@@ -318,6 +322,11 @@ class RiskEngine:
             self._ml_disponivel = kwargs['ml_disponivel']
             if kwargs['ml_disponivel']:
                 self._ml_ultimo_update = time.time()
+        # P0-A30 (v15.26): contexto do status p/ o motivo de ML down
+        if 'ml_status' in kwargs:
+            self._ml_status = kwargs['ml_status']
+        if 'ml_ativo' in kwargs:
+            self._ml_ativo = kwargs['ml_ativo']
         if 'confianca' in kwargs:
             self._confianca_ewma = kwargs['confianca']
         if 'exposure' in kwargs:
@@ -520,7 +529,11 @@ class RiskEngine:
             ml_status = MlAvailability.up()
         else:
             elapsed = time.time() - self._ml_ultimo_update
-            ml_status = MlAvailability.down(f"ML indisponivel por {elapsed:.0f}s")
+            # P0-A30 (v15.26): motivo com status + ativo da ultima inferencia
+            _st = self._ml_status or 'desconhecido'
+            _at = self._ml_ativo or '?'
+            ml_status = MlAvailability.down(
+                f"ML indisponivel p/ {_at} (status={_st}) ha {elapsed:.0f}s")
         
         # Determinar política baseada no ambiente
         ambiente = self.config.get('environment', 'DEVELOPMENT')

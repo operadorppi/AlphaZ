@@ -37,8 +37,12 @@ class TestContractsRollover:
         vp1 = VolumeProfileTracker()
         vp2 = VolumeProfileTracker()
         
-        vp1.atualizar(100, 10, 'compra')
-        vp2.atualizar(200, 5, 'venda')
+        # P0-A27 (v15.22): assinatura agora exige ts_ms (rollover interno).
+        # Os dois trackers sao instancias independentes — cada um acumula o
+        # seu perfil; o teste valida independencia, nao virada de dia.
+        ts = 1725000000000  # epoch ms (mesmo dia BRT p/ ambos)
+        vp1.atualizar(ts, 100, 10, 'compra')
+        vp2.atualizar(ts + 60000, 200, 5, 'venda')
         
         # Devem ser independentes
         assert vp1.calcular(100)['vp_total'] != vp2.calcular(200)['vp_total']
