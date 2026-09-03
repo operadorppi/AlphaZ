@@ -55,19 +55,22 @@ class ProfitRTDAdapter(MarketDataSource):
             backward_sequence_threshold=100,
         )
         self._tt_recebidos = defaultdict(int)  # (sym) -> total trades received (running counter)
-        # v15.33: dedup de reemissoes persistentes da janela T&T/RLP com
-        # identidade COMPLETA (ts + preco + qtd + agressor + compradora +
-        # vendedora). Medicao 2026-09-03: o RTD reentrega as linhas visiveis a
-        # cada RefreshData e 76-98% das linhas gravadas eram reemissoes — cada
-        # trade real deve ser emitido 1x. Trades genuinamente distintos nunca
-        # colidem (qualquer campo diferente = evento novo). Trades identicos
-        # campo-a-campo no mesmo milissegundo sao indistinguiveis na fonte e
-        # sao colapsados — limitacao documentada (rajadas de mesma identidade).
+        # v15.34: dedup de reemissoes persistentes da janela T&T/RLP.
+        # Medicao 2026-09-03: o RTD reentrega as linhas visiveis a cada
+        # RefreshData e 76-98% das linhas gravadas eram reemissoes. A chave e
+        # o trio ESTAVEL (ts + preco + qtd = DAT/PRE/QUL): compradora/vendedora
+        # (e as vezes agressor) OSCILAM entre reemissoes da MESMA linha
+        # ('' -> '-' -> 'Agora' -> 'XP') — inclui-los na chave (v15.33) fazia a
+        # mesma linha reentregue parecer trade novo (IND: 7.320 unicos reais vs
+        # 39.012 com identidade completa). Rajadas GENUINAS (N trades identicos
+        # no mesmo ms, mesmo ciclo de RefreshData) sao preservadas: dentro do
+        # MESMO ciclo nada e suprimido; a reentrega em ciclos posteriores sim.
         rtd_cfg = self.config.get('rtd') or {}
         self._dedup_tt_on = bool(rtd_cfg.get('dedup_tt', True))
         self._dedup_tt_expiry_s = float(rtd_cfg.get('dedup_tt_expiry_s', 900))
         self._dedup_tt_max = int(rtd_cfg.get('dedup_tt_max_por_ativo', 200_000))
-        self._vistos_tt = defaultdict(OrderedDict)  # (sym, kind) -> OrderedDict{sig: receive_ns}
+        self._vistos_tt = defaultdict(OrderedDict)  # (sym, kind) -> OrderedDict{sig: receive_ns} — persistente entre ciclos
+        self._vistos_ciclo = defaultdict(set)       # (sym, kind) -> sigs emitidos NESTE ciclo (merge no fim)
         self._tt_unicos = defaultdict(int)          # (sym, kind) -> emitidos unicos
         self._tt_duplicados = defaultdict(int)      # (sym, kind) -> reemissoes suprimidas
         self._baseline_pending = defaultdict(lambda: True)
@@ -235,17 +238,31 @@ class ProfitRTDAdapter(MarketDataSource):
             except Exception as e:
                 log.warning(f"[RTD] Erro ao desconectar: {e}")
 
-    def _sig_tt(self, event_ts_ms, pre, qtd, agressor, buyer, seller):
-        """Identidade completa do trade p/ dedup v15.33."""
-        return (int(event_ts_ms), float(pre), int(qtd), agressor, buyer, seller)
+    def _sig_tt(self, event_ts_ms, pre, qtd):
+        """Chave ESTAVEL do trade p/ dedup de reemissao (v15.34).
+
+        Identidade = trio DAT/PRE/QUL (ts + preco + qtd). Medicao 2026-09-03:
+        compradora/vendedora (e as vezes agressor) OSCILAM entre reemissoes da
+        MESMA linha — inclui-los na chave fazia a mesma linha reentregue
+        parecer trade novo. O trio e o unico conjunto estavel entre reemissoes
+        e e exatamente o que o Profit entrega sempre.
+        """
+        return (int(event_ts_ms), float(pre), int(qtd))
 
     def _emitir_unicos(self, sym: str, kind: str, sig) -> bool:
-        """Dedup v15.33: True se o trade deve ser emitido (1a ocorrencia).
+        """Dedup v15.34: True se o trade deve ser emitido.
 
-        Reemissoes persistentes (mesma identidade reentregue pelo RTD em
-        ciclos seguintes) sao suprimidas e contadas em _tt_duplicados.
-        Controle de memoria: expira por idade (expiry_s) + cap FIFO por
-        (sym, kind). Desligavel via config rtd.dedup_tt=false.
+        Regras:
+          - DENTRO do mesmo ciclo RefreshData: NUNCA suprime — N linhas
+            identicas no mesmo ms (rajada) emitem N eventos (regra
+            EVENTO != FEATURE: 100 negocios legitimos = 100 eventos);
+          - Entre ciclos: a MESMA identidade reentregue (reemissao
+            persistente da janela) e suprimida e contada em _tt_duplicados.
+
+        A chave e o trio ESTAVEL (ts, preco, qtd) — ver _sig_tt. Controle de
+        memoria: expira por idade (expiry_s) + cap FIFO por (sym, kind),
+        aplicados no merge do fim do ciclo (_fechar_ciclo_tt). Desligavel via
+        config rtd.dedup_tt=false.
         """
         if not self._dedup_tt_on:
             return True
@@ -262,11 +279,37 @@ class ProfitRTDAdapter(MarketDataSource):
         if sig in vistos:
             self._tt_duplicados[chave] += 1
             return False
-        vistos[sig] = agora
-        if len(vistos) > self._dedup_tt_max:
-            vistos.popitem(last=False)
+        # 1a ocorrencia no ciclo: emite (rajada preservada) e marca p/ merge
         self._tt_unicos[chave] += 1
+        self._vistos_ciclo[chave].add(sig)
         return True
+
+    def _fechar_ciclo_tt(self):
+        """Merge das emissoes do ciclo na estrutura persistente (v15.34).
+
+        Chamado ao fim de cada RefreshData: as identidades emitidas NESTE
+        ciclo passam a constar como 'vistas' — a reentrega nos proximos ciclos
+        sera suprimida. Rajadas do MESMO ciclo nunca sao afetadas (o merge so
+        ocorre no fim). Aplica expiracao + cap FIFO apos o merge.
+        """
+        if not self._dedup_tt_on:
+            self._vistos_ciclo = defaultdict(set)
+            return
+        agora = time.time()
+        for chave, sigs in list(self._vistos_ciclo.items()):
+            vistos = self._vistos_tt[chave]
+            # prune expirados antes do cap (nao ocupar espaco com lixo)
+            while vistos:
+                k0, t0 = next(iter(vistos.items()))
+                if agora - t0 > self._dedup_tt_expiry_s:
+                    vistos.popitem(last=False)
+                else:
+                    break
+            for s in sorted(sigs):  # ordem deterministica p/ FIFO previsivel
+                vistos[s] = agora
+            while len(vistos) > self._dedup_tt_max:
+                vistos.popitem(last=False)
+        self._vistos_ciclo = defaultdict(set)
 
     def _deve_emitir_tt(self, sym: str, event_ts_ms: int) -> bool:
         """Baseline R1 (v15.4): decide se uma linha T&T/RLP coerente é emitida.
@@ -335,7 +378,7 @@ class ProfitRTDAdapter(MarketDataSource):
             # identidade como vista p/ a reentrega não virar evento depois.
             if self._dedup_tt_on:
                 self._vistos_tt[(sym, kind)][
-                    self._sig_tt(event_ts_ms, pre, qtd, agressor, buyer, seller)] = time.time()
+                    self._sig_tt(event_ts_ms, pre, qtd)] = time.time()
             return None
 
         self._tt_recebidos[sym] += 1
@@ -350,10 +393,12 @@ class ProfitRTDAdapter(MarketDataSource):
             log.warning(f"[RTD] {sym}: timestamp rejeitado: {motivo} (DAT={dat_str})")
             return None
 
-        # v15.33: dedup de reemissão persistente (identidade completa), antes
-        # do detector de ordenamento p/ não poluir as métricas temporais.
+        # v15.34: dedup de reemissão persistente (chave ESTÁVEL ts+preço+qtd),
+        # antes do detector de ordenamento p/ não poluir as métricas temporais.
+        # Rajadas do MESMO ciclo passam (EVENTO != FEATURE); reentrega em
+        # ciclos posteriores é suprimida no _fechar_ciclo_tt.
         if not self._emitir_unicos(sym, kind,
-                                   self._sig_tt(event_ts_ms, pre, qtd, agressor, buyer, seller)):
+                                   self._sig_tt(event_ts_ms, pre, qtd)):
             return None
 
         # Fase 3: Detectar anomalias temporais
@@ -510,13 +555,18 @@ class ProfitRTDAdapter(MarketDataSource):
                             window_name=f'BOOK{janela_idx}'
                         )
             
-            # v15.33: processa as linhas coerentes deste ciclo com as células
-            # FINAIS (identidade completa e estável para o dedup).
+            # v15.34: processa as linhas coerentes deste ciclo com as células
+            # FINAIS (campos de identidade completos). Emissão adiada p/ fim do
+            # ciclo preserva rajadas (nada é suprimido dentro do MESMO refresh)
+            # e a reentrega nos ciclos seguintes é suprimida pelo dedup.
             for chave in self._coerentes_do_ciclo:
                 kind, sym, j_idx, linha = chave
                 ev = self._emitir_linha_coerente(kind, sym, j_idx, linha)
                 if ev is not None:
                     yield ev
+            # v15.34: marca as identidades deste ciclo como vistas — a mesma
+            # linha reentregue no próximo RefreshData é reemissão, não trade.
+            self._fechar_ciclo_tt()
 
             # v15.4: sem reset global por ciclo — o baseline de cada símbolo
             # encerra individualmente quando chega o 1º dado com DAT >= início
@@ -564,6 +614,7 @@ class ProfitRTDAdapter(MarketDataSource):
         """Reseta baseline + estrutura de dedup (para testes)."""
         self._baseline_pending = defaultdict(lambda: True)
         self._vistos_tt = defaultdict(OrderedDict)
+        self._vistos_ciclo = defaultdict(set)
         self._tt_unicos = defaultdict(int)
         self._tt_duplicados = defaultdict(int)
 
