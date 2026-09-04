@@ -1,84 +1,90 @@
 {
-    "environment": "DEVELOPMENT",
-    "ml_required": false,
-    "fallback_enabled": true,
-    "require_replay_validated": false,
-    "max_drawdown_dia": 0.02,
-    "label": "freebuff-config",
-    "ml_modelo": "",
-    "web_host": "127.0.0.1",
-    "web_port": 5001,
-    "save_intervalo": 60,
-    "ativos": [
-        "WINV26",
-        "WDOV26",
-        "INDV26",
-        "DOLV26"
-    ],
-    "rtd": {
-        "book_linhas": 500,
-        "tt_linhas": 500,
-        "poll_s": 0.001,
-        "event_pump_s": 0.005
-    },
-    "tick_values": {
-        "WIN": 0.2,
-        "IND": 1.0,
-        "WDO": 5.0,
-        "DOL": 125.0
-    },
-    "lotes_minimos": {
-        "WIN": 1,
-        "IND": 5,
-        "WDO": 1,
-        "DOL": 5
-    },
-    "nominal_formula": {
-        "WIN": {
-            "tipo": "pontos",
-            "multiplier": 0.2,
-            "divisor": 1
-        },
-        "IND": {
-            "tipo": "pontos",
-            "multiplier": 5,
-            "divisor": 1
-        },
-        "WDO": {
-            "tipo": "dolar",
-            "nominal_usd": 10000,
-            "divisor": 1000
-        },
-        "DOL": {
-            "tipo": "dolar",
-            "nominal_usd": 250000,
-            "divisor": 1000
-        }
-    },
-    "max_exposure_brl": {
-        "WIN": 200000,
-        "IND": 2000000,
-        "WDO": 100000,
-        "DOL": 3000000
-    },
-    "ativo_principal": "WINV26",
-    "ativo_contexto": "WDOV26",
-    "horarios": {
-        "abertura_fim": [
-            9,
-            0
-        ],
-        "fechamento": [
-            18,
-            30
-        ],
-        "almoco_inicio": [
-            24,
-            0
-        ],
-        "almoco_fim": [
-            24,
-            0
-        ]
+  "environment": "DEVELOPMENT",
+  "ml_required": false,
+  "fallback_enabled": true,
+  "require_replay_validated": false,
+  "max_drawdown_dia": 0.02,
+  "label": "freebuff-config",
+  "ml_modelo": "",
+  "web_host": "127.0.0.1",
+  "web_port": 5001,
+  "save_intervalo": 60,
+  "ativos": [
+    "WINV26",
+    "WDOV26",
+    "INDV26",
+    "DOLV26"
+  ],
+  "rtd": {
+    "book_linhas": 500,
+    "tt_linhas": 500,
+    "poll_s": 0.001,
+    "event_pump_s": 0.005,
+    "tt_linhas_por_ativo": {
+      "WIN": 500,
+      "WDO": 500,
+      "IND": 100,
+      "DOL": 200
     }
+  },
+  "tick_values": {
+    "WIN": 0.2,
+    "IND": 1.0,
+    "WDO": 5.0,
+    "DOL": 125.0
+  },
+  "lotes_minimos": {
+    "WIN": 1,
+    "IND": 5,
+    "WDO": 1,
+    "DOL": 5
+  },
+  "nominal_formula": {
+    "WIN": {
+      "tipo": "pontos",
+      "multiplier": 0.2,
+      "divisor": 1
+    },
+    "IND": {
+      "tipo": "pontos",
+      "multiplier": 5,
+      "divisor": 1
+    },
+    "WDO": {
+      "tipo": "dolar",
+      "nominal_usd": 10000,
+      "divisor": 1000
+    },
+    "DOL": {
+      "tipo": "dolar",
+      "nominal_usd": 250000,
+      "divisor": 1000
+    }
+  },
+  "max_exposure_brl": {
+    "WIN": 200000,
+    "IND": 2000000,
+    "WDO": 100000,
+    "DOL": 3000000
+  },
+  "ativo_principal": "WINV26",
+  "ativo_contexto": "WDOV26",
+  "horarios": {
+    "abertura_fim": [
+      9,
+      0
+    ],
+    "fechamento": [
+      18,
+      30
+    ],
+    "almoco_inicio": [
+      24,
+      0
+    ],
+    "almoco_fim": [
+      24,
+      0
+    ]
+  }
 }

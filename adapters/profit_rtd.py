@@ -47,6 +47,31 @@ if str(_root) not in sys.path:
     sys.path.insert(0, str(_root))
 
 
+def _linhas_tt_por_ativo(rtd_cfg, sym):
+    """Profundidade de linhas T&T por ativo (v15.39).
+
+    Rajadas de WIN/WDO usam o teto de 500 linhas (medido 2026-09-04: max/100ms
+    = 500 em WIN, 364 em WDO). IND/DOL (~10 trades/min) com 500 linhas guardam
+    ~45-54 min de historico visivel -> reentrega massiva de linhas antigas e
+    rejeicoes por >300s. Para eles bastam 100-200 linhas (rajada medida: IND
+    26/100ms, DOL 77/100ms), com folga 3-4x.
+
+    Resolucao por PREFIXO do simbolo (WINV26 -> 'WIN'), mais longo primeiro,
+    com fallback para rtd.tt_linhas.
+    """
+    rtd_cfg = rtd_cfg or {}
+    por_ativo = rtd_cfg.get('tt_linhas_por_ativo') or {}
+    default = int(rtd_cfg.get('tt_linhas', 500))
+    sym_u = str(sym).upper()
+    melhor = None  # (tamanho_do_prefixo, linhas)
+    for prefixo, n in por_ativo.items():
+        p = str(prefixo).upper()
+        if p and sym_u.startswith(p):
+            if melhor is None or len(p) > melhor[0]:
+                melhor = (len(p), int(n))
+    return melhor[1] if melhor else default
+
+
 class ProfitRTDAdapter(MarketDataSource):
     """Implementação real (Windows Only) que isola o win32com do Domínio."""
     
@@ -195,9 +220,11 @@ class ProfitRTDAdapter(MarketDataSource):
 
         # Linhas vêm da seção 'rtd' do config (ex.: 500/500). Assinar mais linhas
         # do que a janela RTD suporta faz o servidor crashar (Access Violation).
+        # v15.39: T&T usa profundidade POR ATIVO (_linhas_tt_por_ativo) —
+        # WIN/WDO 500 (rajadas), IND 100 / DOL 200 (reduz reentrega de linhas
+        # antigas em ativos de baixo volume). BOOK permanece 500 global.
         rtd_cfg = self.config.get('rtd') or {}
         book_linhas = int(rtd_cfg.get('book_linhas', 500))
-        tt_linhas = int(rtd_cfg.get('tt_linhas', 1000))
         
         # Assinatura resiliente: cada ConnectData é protegido (o servidor RTD pode
         # crashar com Access Violation em janelas corrompidas) e o pump roda entre
@@ -218,7 +245,8 @@ class ProfitRTDAdapter(MarketDataSource):
 
         for j_idx, sym in self._tt_map.items():
             ok = fail = 0
-            for linha in range(tt_linhas):
+            linhas = _linhas_tt_por_ativo(rtd_cfg, sym)
+            for linha in range(linhas):
                 for field in TT_FIELDS:
                     try:
                         tid, _ = _connect(self._srv, [f"T&T{j_idx}", field, str(linha)])
@@ -233,7 +261,8 @@ class ProfitRTDAdapter(MarketDataSource):
         # v12.5: Assinar topicos RLP (janelas duplicadas)
         for j_idx, sym in self._rlp_map.items():
             ok = fail = 0
-            for linha in range(tt_linhas):
+            linhas = _linhas_tt_por_ativo(rtd_cfg, sym)
+            for linha in range(linhas):
                 for field in TT_FIELDS:
                     try:
                         tid, _ = _connect(self._srv, [f"T&T{j_idx}", field, str(linha)])
