@@ -27,8 +27,17 @@ import logging
 from datetime import datetime, time as dt_time
 from typing import Optional, Dict, Any, List
 from core.contracts import Signal, RiskDecision
+from core.lograte import LogRateLimit
 
 log = logging.getLogger('risk_engine')
+
+
+def _hora_brt(ts_ms):
+    """Formata ts epoch-ms em HH:MM:SS.mmm (fuso local/Brasília) p/ logs."""
+    try:
+        return datetime.fromtimestamp(ts_ms / 1000.0).strftime('%H:%M:%S.%f')[:-3]
+    except Exception:
+        return str(ts_ms)
 
 
 class RiskEngine:
@@ -104,11 +113,14 @@ class RiskEngine:
         self.min_confianca = tc.get('limiar_confirmacao', 0.50)
         
         # 12. Session Protection (lido do config.json)
+        # v15.35: default = pregão B3 de futuros 09:00–18:30, sem almoço.
+        # Antes o default era 10:00–16:30 (horário de ações) e bloqueava
+        # FORA_HORARIO às 09:56 com o mercado aberto.
         horarios = self.config.get('horarios', {})
-        abertura = horarios.get('abertura_fim', [10, 0])
-        fechamento = horarios.get('fechamento', [16, 30])
-        almoco_ini = horarios.get('almoco_inicio', [12, 0])
-        almoco_fim = horarios.get('almoco_fim', [13, 30])
+        abertura = horarios.get('abertura_fim', [9, 0])
+        fechamento = horarios.get('fechamento', [18, 30])
+        almoco_ini = horarios.get('almoco_inicio', [24, 0])
+        almoco_fim = horarios.get('almoco_fim', [24, 0])
         self.hora_abre = f'{abertura[0]:02d}:{abertura[1]:02d}'
         self.hora_fecha = f'{fechamento[0]:02d}:{fechamento[1]:02d}'
         self.hora_almoco_ini = f'{almoco_ini[0]:02d}:{almoco_ini[1]:02d}'
@@ -127,6 +139,13 @@ class RiskEngine:
         self.cb_nivel3_perdas = cb.get('nivel3_perdas', 7)
         self.cb_recovery_s = cb.get('recovery_s', 1800)
         self._cb_ultimo_reset = 0
+        # v15.36: console limpo — BLOQUEADO repetido (ex.: CONFIANCA_BAIXA a
+        # cada evento) agregado por (ativo, motivo) com contador por janela.
+        # Janela de 60s: condição persistente = no máx. 1 linha/min (não 1 a
+        # cada 5s). A 1ª ocorrência de um motivo SEMPRE loga na hora (motivos
+        # críticos como KILL_SWITCH não sofrem atraso).
+        self._lograte = LogRateLimit(janela_s=float(self.config.get('log_janela_s', 60.0)),
+                                     logger=log)
         
         # ============================================================
         # ESTADO
@@ -679,7 +698,10 @@ class RiskEngine:
             log.info(f"[RISK ENGINE] APROVADO {ativo} size={size} tp={tp} sl={sl} "
                      f"risk={risk_score:.2f} nivel={risk_level}")
         else:
-            log.warning(f"[RISK ENGINE] BLOQUEADO {ativo} motivo={motivo}")
+            ts_evento = getattr(signal, 'timestamp_ms', None) or ts_ms
+            self._lograte.aviso(('bloqueado', ativo, motivo),
+                                f"[RISK ENGINE] BLOQUEADO {ativo} motivo={motivo}",
+                                f"evento {_hora_brt(ts_evento)}")
         
         # Historico
         self.historico_decisoes.append({

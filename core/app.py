@@ -348,7 +348,11 @@ class App:
     # ---- Loop principal ----
 
     def run(self):
-        logging.basicConfig(level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
+        # v15.36: garante UM único handler de raiz (evita linhas duplicadas/
+        # cortadas no console quando App é iniciado por watchdog ou outro
+        # entry point que já configurou logging).
+        if not logging.getLogger().handlers:
+            logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
 
         def persistence_worker():
             while not self._shutdown.is_set():

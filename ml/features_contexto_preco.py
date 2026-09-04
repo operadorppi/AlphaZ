@@ -134,6 +134,14 @@ def adicionar_contexto_preco(df, ref_diario=None, preco_col=None,
     df['_dia'] = _dia_de_ts(df[ts_col])
     df = df.sort_values([ativo_col, ts_col]).reset_index(drop=True)
 
+    # v15.35: idempotência — se o dataset JÁ foi enriquecido por uma chamada
+    # anterior (ex.: dataset_builder no passo 4 + integrar_base no passo 4.5),
+    # drop das colunas de referência D-1 antes do merge; senão o merge gera
+    # sufixos _x/_y e o nome limpo (fechamento_anterior etc.) some → KeyError.
+    _REF_COLS = ['abertura_anterior', 'fechamento_anterior', 'ajuste_anterior',
+                 'maxima_anterior', 'minima_anterior', 'faixa_anterior']
+    df = df.drop(columns=[c for c in _REF_COLS if c in df.columns])
+
     g = df.groupby([ativo_col, '_dia'])[pc]
 
     # --- Intraday causal (expanding DENTRO do dia = só passado) ---

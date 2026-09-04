@@ -62,5 +62,23 @@
         "DOL": 3000000
     },
     "ativo_principal": "WINV26",
-    "ativo_contexto": "WDOV26"
+    "ativo_contexto": "WDOV26",
+    "horarios": {
+        "abertura_fim": [
+            9,
+            0
+        ],
+        "fechamento": [
+            18,
+            30
+        ],
+        "almoco_inicio": [
+            24,
+            0
+        ],
+        "almoco_fim": [
+            24,
+            0
+        ]
+    }
 }

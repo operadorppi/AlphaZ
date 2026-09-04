@@ -533,9 +533,15 @@ FileStorage = CapturaEventosMS
 # Helper para leitura hive
 # ========================================================================
 
-def find_hive_files(base_dir, dia_str=None, data_type=None, asset=None):
-    """Busca arquivos Parquet na estrutura hive."""
-    base = Path(base_dir) / 'RAW'
+def find_hive_files(base_dir, dia_str=None, data_type=None, asset=None, base_subdir='RAW'):
+    """Busca arquivos Parquet na estrutura hive.
+
+    base_subdir: subpasta dentro de base_dir onde a estrutura hive mora
+    (default 'RAW'). Para dados limpos derivados (ex.: TT_LIMPO), passar
+    base_subdir='LIMPO' — o chamador é responsável por pedir o data_type
+    correto (ex.: 'TT_LIMPO').
+    """
+    base = Path(base_dir) / base_subdir
     if not base.exists():
         return []
 
@@ -548,6 +554,8 @@ def find_hive_files(base_dir, dia_str=None, data_type=None, asset=None):
         dt_globs = [f'data_type={data_type}']
     else:
         dt_globs = ['data_type=TT', 'data_type=BOOK']
+        if base_subdir == 'LIMPO':
+            dt_globs = ['data_type=TT_LIMPO', 'data_type=BOOK_LIMPO']
 
     if asset:
         asset_globs = [f'asset={asset}']

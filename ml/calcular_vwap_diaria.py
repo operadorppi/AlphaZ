@@ -35,35 +35,31 @@ import pyarrow.parquet as pq
 
 from calcular_ajuste_diario import (
     RAW_BASE_DEFAULT, COLS_TT,
-    listar_arquivos_contrato, listar_dias,
+    carregar_negocios, listar_dias,
 )
 
 
+# v15.35: leitura unificada via carregar_negocios (schema Hive novo:
+# ts_ns/ativo em vez de time_ms/simbolo; TT_LIMPO preferido sobre RAW).
 def carregar_negocios_brutos(ano, mes, dias, contratos,
                              raw_base=RAW_BASE_DEFAULT, exclude_backup=True):
     """Carrega todos os negocios brutos de varios dias/contratos.
-    Retorna DataFrame unificado.
+    Retorna DataFrame unificado com colunas [time_ms, timestamp_brt,
+    simbolo, preco, quantidade].
     """
     if not isinstance(contratos, (list, tuple)):
         contratos = [contratos]
     parts = []
     for contrato in contratos:
         for dia in dias:
-            arquivos = listar_arquivos_contrato(ano, mes, dia, contrato, raw_base)
-            if exclude_backup:
-                arquivos = [a for a in arquivos if '_backup_colapso' not in a]
-            for a in arquivos:
-                t = pq.read_table(a, columns=COLS_TT)
-                parts.append(t.to_pandas())
+            df = carregar_negocios(ano, mes, dia, contrato, raw_base,
+                                   exclude_backup=exclude_backup)
+            if not df.empty:
+                parts.append(df)
     if not parts:
-        return pd.DataFrame(columns=COLS_TT)
+        return pd.DataFrame(columns=['time_ms', 'timestamp_brt', 'simbolo',
+                                     'preco', 'quantidade'])
     df = pd.concat(parts, ignore_index=True)
-    # dedup
-    if df['event_id'].notna().all():
-        df = df.drop_duplicates(subset=['event_id'], keep='first')
-    else:
-        df = df.drop_duplicates(subset=['time_ms', 'preco', 'quantidade', 'simbolo'],
-                                keep='first')
     # invalidos
     df = df[(df['quantidade'] > 0) & (df['preco'] > 0)]
     df = df.sort_values(['simbolo', 'time_ms']).reset_index(drop=True)

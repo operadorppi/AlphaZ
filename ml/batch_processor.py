@@ -72,11 +72,20 @@ def processar_dia(ativo, ctx, data_file, SAVE_DIR, ativos_conhecidos=None):
         ativos_conhecidos = [ativo] + ([ctx] if ctx else [])
     
     # v14: Buscar dados na estrutura Hive Parquet OU JSONL legado
+    # v15.34: preferir o Hive LIMPO (TT_LIMPO — reemissoes removidas, rajadas
+    # preservadas por received_at_ns) quando existir para o dia; fallback para
+    # o RAW original. O RAW de dias gravados com o motor antigo contem 76-98%
+    # de reemissoes — features calculadas sobre ele ficariam infladas.
     from adapters.file_storage import find_hive_files
     
-    # Tentar Hive Parquet primeiro
-    tt_files = find_hive_files(SAVE_DIR, dia_str=data_str, data_type='TT')
-    book_files = find_hive_files(SAVE_DIR, dia_str=data_str, data_type='BOOK')
+    tt_files = find_hive_files(SAVE_DIR, dia_str=data_str, data_type='TT_LIMPO',
+                               base_subdir='LIMPO')
+    if not tt_files:
+        tt_files = find_hive_files(SAVE_DIR, dia_str=data_str, data_type='TT')
+    book_files = find_hive_files(SAVE_DIR, dia_str=data_str, data_type='BOOK_LIMPO',
+                                 base_subdir='LIMPO')
+    if not book_files:
+        book_files = find_hive_files(SAVE_DIR, dia_str=data_str, data_type='BOOK')
     
     negocios = []
     if tt_files:
@@ -97,7 +106,8 @@ def processar_dia(ativo, ctx, data_file, SAVE_DIR, ativos_conhecidos=None):
                     })
             except Exception as e:
                 print(f'  Erro ao ler {tf}: {e}')
-        print(f'  Carregados {len(negocios)} negócios de {len(tt_files)} Parquet hive')
+        fonte = 'TT_LIMPO (limpo)' if 'LIMPO' in str(tt_files[0]) else 'TT (RAW)'
+        print(f'  Carregados {len(negocios)} negócios de {len(tt_files)} Parquet hive [{fonte}]')
     else:
         # Fallback: JSONL legado
         neg_files = sorted(Path(SAVE_DIR).glob(f'raw_negocios_ms_{data_str}*.jsonl'))
@@ -134,15 +144,36 @@ def processar_dia(ativo, ctx, data_file, SAVE_DIR, ativos_conhecidos=None):
         if book:
             print(f'  Carregados {len(book)} book snapshots de {len(book_files_jsonl)} JSONL legado')
     
-    # Processar com GeradorJanelas
+    # Processar com GeradorJanelas — fluxo ÚNICO cronológico (trades + book
+    # intercalados por ts_ms via heapq.merge, sem materializar a lista toda).
+    #
+    # v15.35: ANTES, os negócios eram alimentados agrupados por arquivo
+    # (todo o DOL, depois IND, WDO, WIN). Como o relógio de cortes de 100ms
+    # avança a cada evento, o primeiro ativo (DOL, ordem alfabética dos
+    # arquivos) consumia o dia inteiro e os demais ativos chegavam com
+    # timestamps "no passado" — nunca cruzavam um corte e ficavam com ~0
+    # snapshots. O book também era processado SÓ DEPOIS de toda a emissão,
+    # então snap['book'] nunca era preenchido.
     gerador = GeradorJanelas(
         instrumentos=ativos_conhecidos,
         janela_ms=100, passo_ms=100
     )
-    
+
+    import heapq
+    negocios.sort(key=lambda n: n['ts_ms'])
+    book.sort(key=lambda b: b['ts_ms'])
+    fluxo = heapq.merge(
+        ((n['ts_ms'], 0, n) for n in negocios),   # 0 = trade (negócio)
+        ((b['ts_ms'], 1, b) for b in book),       # 1 = book (estado antes do trade no mesmo ms)
+    )
+
     snapshots = []
     contagem = {}
-    for neg in negocios:
+    for ts_ms, kind, payload in fluxo:
+        if kind == 1:
+            gerador.processar_book(payload['ativo'], payload['ts_ms'], payload)
+            continue
+        neg = payload
         novos = gerador.processar_evento(
             neg['ativo'], neg['ts_ms'], neg['preco'], neg['qtd'],
             neg['agressor'], neg.get('compradora', ''), neg.get('vendedora', '')
@@ -157,11 +188,7 @@ def processar_dia(ativo, ctx, data_file, SAVE_DIR, ativos_conhecidos=None):
             if ativo_n in ativos_conhecidos and faixa[0] <= preco <= faixa[1]:
                 snapshots.append(snap_n)
                 contagem[ativo_n] = contagem.get(ativo_n, 0) + 1
-    
-    # Processar book separadamente
-    for b in book:
-        gerador.processar_book(b['ativo'], b['ts_ms'], b)
-    
+
     resumo = ' | '.join(f'{a}: {c:,}' for a, c in sorted(contagem.items()))
     print(f'  Total: {len(snapshots):,} snapshots ({resumo})')
     return snapshots
@@ -170,7 +197,10 @@ def processar_dia(ativo, ctx, data_file, SAVE_DIR, ativos_conhecidos=None):
 def main():
     parser = argparse.ArgumentParser(description='Batch processor para raw_events')
     parser.add_argument('--ativo', default='WINV26', help='Ativo(s): WINV26 ou WINV26,INDV26,WDOU26,DOLU26')
-    parser.add_argument('--ctx', default='WDOU26', help='Ativo contexto (legacy)')
+    parser.add_argument('--ctx', default='', help='Ativo contexto (legacy; vazio = não adicionar ao nome do arquivo)')
+    # v15.35: default vazio — antes, 'WDOU26' era sempre anexado a `ativos` e
+    # entrava no nome do dataset (dataset_100ms_..._WDOU26_...) enquanto o
+    # pipeline_diario procurava o arquivo sem o sufixo → passo 3 abortava.
     parser.add_argument('--dia', type=int, help='Dia do mês (ex: 20)')
     parser.add_argument('--periodo', help='Range de dias (ex: 15-20)')
     parser.add_argument('--arquivo', help='Arquivo específico para processar')

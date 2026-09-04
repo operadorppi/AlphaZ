@@ -48,17 +48,24 @@ from calcular_vwap_diaria import (
 )
 
 # Config
-RAW_BASE = r'D:\MarketData\Profit\RAW'
-DATASET_BASE = r'D:\MarketData\mimo\26\dataset_final.parquet'
-DATASET_COMPL = r'D:\MarketData\mimo\26\dataset_final_completo.parquet'
+# v15.35: paths atualizados para a estrutura Hive nova — RAW em
+# D:\MarketData\mimo\RAW (data_type=TT/date=YYYYMMDD/asset=X) e dataset
+# final na raiz de SAVE_DIR (saída do passo 4 do pipeline_diario).
+RAW_BASE = r'D:\MarketData\mimo\RAW'
+DATASET_BASE = r'D:\MarketData\mimo\dataset_final.parquet'
+DATASET_COMPL = r'D:\MarketData\mimo\dataset_final_completo.parquet'
 SAVE_DIR = r'D:\MarketData\mimo'
-ATIVOS = ['WINV26', 'WDOV26']
+ATIVOS = ['WINV26', 'INDV26', 'WDOV26', 'DOLV26']
 
 
 def integrar(mes, ativos, ano=None, force=False):
     """Pipeline completo: RAW -> dataset enriquecido."""
     if ano is None:
         ano = int(str(mes)[:4])
+    # v15.35: mes pode chegar como YYYYMM (ex.: 202609 do pipeline) —
+    # normalizar para mês 1-12 antes de usar em listar_dias/ajuste/vwap.
+    if mes > 100:
+        mes = int(str(mes)[4:6])
     t0 = time.time()
     print('=' * 70)
     print(f'INTEGRAR BASE — {mes} ({", ".join(ativos)})')

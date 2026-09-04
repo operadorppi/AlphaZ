@@ -6,6 +6,7 @@ adapters/profit_rtd.py — Implementação Live do MarketDataSource via Profit R
 import os
 import time
 import logging
+from datetime import datetime
 from typing import Iterator
 from adapters.base import MarketDataSource
 from core.contracts import MarketEvent, TradeEvent, BookSnapshot, BookLevel
@@ -20,6 +21,7 @@ from adapters.rtd_connection import (
 from adapters.rtd_parser import parse_refresh_data, parse_hms_ms, parse_dat, enforce_schema
 from core.temporal import dat_to_epoch_ms, now_ns, next_sequence_id, validate_event_ts
 from core.event_ordering import EventOrderingDetector
+from core.lograte import LogRateLimit
 from adapters.rtd_writer import (
     thread_escritora, thread_escritora_tt,
     write_parquet_part, consolidar_book_parquet, consolidar_tt_parquet,
@@ -27,6 +29,15 @@ from adapters.rtd_writer import (
 )
 
 log = logging.getLogger(__name__)
+
+
+def _hora_evt(ts_ms):
+    """Formata ts epoch-ms em HH:MM:SS.mmm (fuso local/Brasília) p/ logs."""
+    try:
+        return datetime.fromtimestamp(ts_ms / 1000.0).strftime('%H:%M:%S.%f')[:-3]
+    except Exception:
+        return str(ts_ms)
+
 
 # Adiciona raiz do projeto ao path
 import sys
@@ -69,6 +80,12 @@ class ProfitRTDAdapter(MarketDataSource):
         self._dedup_tt_on = bool(rtd_cfg.get('dedup_tt', True))
         self._dedup_tt_expiry_s = float(rtd_cfg.get('dedup_tt_expiry_s', 900))
         self._dedup_tt_max = int(rtd_cfg.get('dedup_tt_max_por_ativo', 200_000))
+        # v15.36: console limpo — avisos repetidos (timestamp rejeitado,
+        # fora de ordem, salto, sequencia) agregados por janela com contador.
+        # Janela de 60s: condição persistente = no máx. 1 linha/min (não 1 a
+        # cada 5s); a 1ª ocorrência loga na hora.
+        self._lograte = LogRateLimit(janela_s=float(rtd_cfg.get('log_janela_s', 60.0)),
+                                     logger=log)
         self._vistos_tt = defaultdict(OrderedDict)  # (sym, kind) -> OrderedDict{sig: receive_ns} — persistente entre ciclos
         self._vistos_ciclo = defaultdict(set)       # (sym, kind) -> sigs emitidos NESTE ciclo (merge no fim)
         self._tt_unicos = defaultdict(int)          # (sym, kind) -> emitidos unicos
@@ -386,11 +403,15 @@ class ProfitRTDAdapter(MarketDataSource):
         # Se DAT inválido, usar receive_ts como fallback (documentado)
         if event_ts_ms <= 0:
             event_ts_ms = receive_ns // 1_000_000
-            log.warning(f"[RTD] DAT invalido '{dat_str}' para {sym}, usando receive_ts como fallback")
+            self._lograte.aviso(('dat_invalido', sym),
+                                f"[RTD] {sym}: DAT invalido, usando receive_ts como fallback",
+                                f"(DAT='{dat_str}')")
 
         valido, motivo = validate_event_ts(event_ts_ms, receive_ns)
         if not valido:
-            log.warning(f"[RTD] {sym}: timestamp rejeitado: {motivo} (DAT={dat_str})")
+            self._lograte.aviso(('ts_rejeitado', sym, motivo),
+                                f"[RTD] {sym}: timestamp rejeitado: {motivo}",
+                                f"(DAT={dat_str})")
             return None
 
         # v15.34: dedup de reemissão persistente (chave ESTÁVEL ts+preço+qtd),
@@ -407,12 +428,19 @@ class ProfitRTDAdapter(MarketDataSource):
             return None
         if ord_result.is_late:
             log.debug(f"[RTD] {sym}: evento atrasado lag={ord_result.lag_ms}ms")
+        evt_hora = _hora_evt(event_ts_ms)
         if ord_result.is_out_of_order:
-            log.warning(f"[RTD] {sym}: fora de ordem gap={ord_result.gap_ms}ms ({ord_result.reason})")
+            self._lograte.aviso(('fora_ordem', sym),
+                                f"[RTD] {sym}: fora de ordem",
+                                f"evento {evt_hora} gap={ord_result.gap_ms}ms ({ord_result.reason})")
         if ord_result.is_forward_jump:
-            log.warning(f"[RTD] {sym}: salto temporal {ord_result.gap_ms}ms")
+            self._lograte.aviso(('salto_temporal', sym),
+                                f"[RTD] {sym}: salto temporal",
+                                f"evento {evt_hora} gap={ord_result.gap_ms}ms")
         if ord_result.is_backward_sequence:
-            log.warning(f"[RTD] {sym}: sequencia regressiva ({ord_result.reason})")
+            self._lograte.aviso(('sequencia_regressiva', sym),
+                                f"[RTD] {sym}: sequencia regressiva",
+                                f"evento {evt_hora} ({ord_result.reason})")
 
         seq_id = next_sequence_id()
         trade = TradeEvent(

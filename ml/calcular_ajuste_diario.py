@@ -43,7 +43,7 @@ import pyarrow.parquet as pq
 # ============================================================
 #   CONFIG
 # ============================================================
-RAW_BASE_DEFAULT = r'D:\MarketData\Profit\RAW'
+RAW_BASE_DEFAULT = r'D:\MarketData\mimo\RAW'
 
 # Janelas default (parametrizaveis via argumento)
 JANELAS_DEFAULT = {
@@ -56,36 +56,48 @@ JANELAS_DEFAULT = {
     'WDOQ26':  ('15:50:00', '16:00:00'),
 }
 
-COLS_TT = ['event_id', 'time_ms', 'timestamp_brt', 'simbolo',
-           'preco', 'quantidade']
+COLS_TT = ['ts_ns', 'ativo', 'preco', 'quantidade']
 
 
 # ============================================================
 #   LEITURA PARTICIONADA
 # ============================================================
 def listar_dias(ano, mes, raw_base=RAW_BASE_DEFAULT):
-    """Retorna lista ordenada de dias disponíveis para (ano, mes)."""
-    base = os.path.join(raw_base, f'ano={ano}', f'mes={mes:02d}')
+    """Retorna lista ordenada de dias disponíveis para (ano, mes) na
+    estrutura Hive nova (RAW/data_type=TT/date=YYYYMMDD/asset=X)."""
+    base = os.path.join(raw_base, 'data_type=TT')
     if not os.path.isdir(base):
         return []
-    dias = []
+    prefixo = f'{ano:04d}{mes:02d}'
+    dias = set()
     for d in sorted(os.listdir(base)):
-        if d.startswith('dia='):
+        if d.startswith('date=') and len(d) == 13 and d[5:11] == prefixo:
             try:
-                dia = int(d.split('=')[1])
-                dias.append(dia)
+                dias.add(int(d[11:13]))
             except ValueError:
                 pass
-    return dias
+    return sorted(dias)
 
 
 def listar_arquivos_contrato(ano, mes, dia, contrato, raw_base=RAW_BASE_DEFAULT):
-    """Lista arquivos parquet de T&T para um contrato/dia."""
-    base = (f'{raw_base}/ano={ano}/mes={mes:02d}/dia={dia:02d}'
-            f'/sym={contrato}/tipo=TT')
-    if not os.path.isdir(base):
-        return []
-    return sorted(glob.glob(os.path.join(base, '*.parquet')))
+    """Lista arquivos parquet de T&T para um contrato/dia (estrutura Hive).
+    As partições Hive usam o PREFIXO do ativo (asset=WIN, asset=WDO, ...) e
+    não o contrato completo (WINV26). Prefere TT_LIMPO (deduplicado, sem
+    reemissoes) quando existe; fallback RAW."""
+    date_str = f'{ano:04d}{mes:02d}{dia:02d}'
+    asset_part = contrato[:3].upper()  # 'WINV26' -> 'WIN'
+    # 1) TT_LIMPO (limpo) em LIMPO/data_type=TT_LIMPO
+    base_limpo = os.path.join(os.path.dirname(raw_base), 'LIMPO',
+                              'data_type=TT_LIMPO', f'date={date_str}',
+                              f'asset={asset_part}')
+    if os.path.isdir(base_limpo):
+        return sorted(glob.glob(os.path.join(base_limpo, '*.parquet')))
+    # 2) Fallback RAW (asset=WIN e também WIN_RLP — pega só o prefixo exato)
+    base_raw = os.path.join(raw_base, 'data_type=TT', f'date={date_str}',
+                            f'asset={asset_part}')
+    if os.path.isdir(base_raw):
+        return sorted(glob.glob(os.path.join(base_raw, '*.parquet')))
+    return []
 
 
 def carregar_negocios(ano, mes, dia, contrato, raw_base=RAW_BASE_DEFAULT,
@@ -99,7 +111,8 @@ def carregar_negocios(ano, mes, dia, contrato, raw_base=RAW_BASE_DEFAULT,
         arquivos = [a for a in arquivos if '_backup_colapso' not in a]
 
     if not arquivos:
-        return pd.DataFrame(columns=COLS_TT)
+        return pd.DataFrame(columns=['time_ms', 'timestamp_brt', 'simbolo',
+                                     'preco', 'quantidade'])
 
     parts = []
     for a in arquivos:
@@ -107,18 +120,28 @@ def carregar_negocios(ano, mes, dia, contrato, raw_base=RAW_BASE_DEFAULT,
         parts.append(t.to_pandas())
     df = pd.concat(parts, ignore_index=True)
 
-    # dedup: event_id é a chave canônica
-    if 'event_id' in df.columns and df['event_id'].notna().all():
-        df = df.drop_duplicates(subset=['event_id'], keep='first')
+    # v15.35: schema Hive novo — ts_ns (ns epoch) em vez de time_ms,
+    # ativo em vez de simbolo, sem event_id.
+    df['time_ms'] = (df['ts_ns'] // 1_000_000).astype('int64')
+    df['timestamp_brt'] = (pd.to_datetime(df['ts_ns'], unit='ns', utc=True)
+                           .dt.tz_convert('America/Sao_Paulo')
+                           .dt.tz_localize(None))
+    df['simbolo'] = df['ativo']
+
+    # Dedup SÓ no fallback RAW (que tem reemissoes da janela T&T). O
+    # TT_LIMPO já vem deduplicado na origem preservando rajadas legítimas
+    # (mesmo ts/preco/qtd com received_at_ns distintos) — dedup adicional
+    # aqui colapsaria rajadas reais.
+    if arquivos and '_LIMPO' in str(arquivos[0]):
+        pass  # fonte limpa — não deduplicar
     else:
-        # fallback se event_id ausente
         df = df.drop_duplicates(subset=['time_ms', 'preco', 'quantidade', 'simbolo'],
                                 keep='first')
 
     # descartar inválidos
     df = df[(df['quantidade'] > 0) & (df['preco'] > 0)]
     df = df.sort_values('time_ms').reset_index(drop=True)
-    return df
+    return df[['time_ms', 'timestamp_brt', 'simbolo', 'preco', 'quantidade']]
 
 
 # ============================================================

@@ -19,22 +19,34 @@ def custo_execucao(ativo, config=None):
     return 5.0
 
 def horario_permite_abrir(config=None):
-    """Valida se a janela de tempo permite novas entradas."""
+    """Valida se a janela de tempo permite novas entradas.
+
+    v15.35: lê a MESMA fonte de `horarios` do config.json usada pelo
+    RiskEngine._check_session() (FASE 6 — unificação de risco). Pregão B3 de
+    futuros: 09:00–18:30 contínuo, sem pausa de almoço. Antes o default era
+    09:05–17:30 com almoço 12:00–13:00, que bloqueava FORA_HORARIO às 09:56
+    mesmo com o mercado aberto.
+    """
     if not config: config = {}
     agora = datetime.now().time()
-    
-    # Configurações padrão: abre 09:05, para 17:30
-    h_abre = datetime.strptime("09:05", "%H:%M").time()
-    h_fecha = datetime.strptime("17:30", "%H:%M").time()
-    
+
+    horarios = config.get('horarios', {})
+    h_abre = horarios.get('abertura_fim', [9, 0])
+    h_fecha = horarios.get('fechamento', [18, 30])
+    h_abre_t = datetime.strptime(f'{h_abre[0]:02d}:{h_abre[1]:02d}', '%H:%M').time()
+    h_fecha_t = datetime.strptime(f'{h_fecha[0]:02d}:{h_fecha[1]:02d}', '%H:%M').time()
+
     if config.get('desligar_horarios_ruins', True):
-        if agora < h_abre or agora > h_fecha:
+        if agora < h_abre_t or agora > h_fecha_t:
             return False
-        # Pausa opcional no almoço
-        h_alm_ini = datetime.strptime("12:00", "%H:%M").time()
-        h_alm_fim = datetime.strptime("13:00", "%H:%M").time()
-        if h_alm_ini <= agora <= h_alm_fim:
-            return False
+        # Pausa opcional no almoço (desabilitada com hora >= 24)
+        h_alm_ini = horarios.get('almoco_inicio', [24, 0])
+        h_alm_fim = horarios.get('almoco_fim', [24, 0])
+        if h_alm_ini[0] < 24 and h_alm_fim[0] < 24:
+            h_alm_ini_t = datetime.strptime(f'{h_alm_ini[0]:02d}:{h_alm_ini[1]:02d}', '%H:%M').time()
+            h_alm_fim_t = datetime.strptime(f'{h_alm_fim[0]:02d}:{h_alm_fim[1]:02d}', '%H:%M').time()
+            if h_alm_ini_t <= agora <= h_alm_fim_t:
+                return False
     return True
 
 class RiskManager:
