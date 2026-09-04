@@ -409,7 +409,12 @@ class ProfitRTDAdapter(MarketDataSource):
 
         valido, motivo = validate_event_ts(event_ts_ms, receive_ns)
         if not valido:
-            self._lograte.aviso(('ts_rejeitado', sym, motivo),
+            # v15.38: chave ESTÁVEL — o motivo traz os segundos do lag
+            # ('timestamp_passado (343s behind)'), que muda a cada ciclo e
+            # faria cada linha do drain logar separado. Agrupa por tipo:
+            # 'timestamp_passado' / 'ts_futuro' → 1 resumo por minuto.
+            motivo_tipo = motivo.split(' (')[0]
+            self._lograte.aviso(('ts_rejeitado', sym, motivo_tipo),
                                 f"[RTD] {sym}: timestamp rejeitado: {motivo}",
                                 f"(DAT={dat_str})")
             return None
